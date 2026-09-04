@@ -264,3 +264,56 @@ def cleanup_holds_endpoint(db = Depends(get_db)):
     cleaned = cleanup_expired_holds_orm(db)
     return {"status": "ok", "cleaned_holds": cleaned}
 
+@app.delete("/holds/{id}", status_code=status.HTTP_200_OK)
+def release_hold_endpoint(
+    id: str,
+    db = Depends(get_db),
+):
+    """
+    Atomically releases an active hold and frees all of its seats back to AVAILABLE.
+
+    Guarantees:
+    - Operation is transactional.
+    - Makes all seats belonging to that hold available again.
+    - A released hold cannot later be confirmed.
+    - Releasing an already expired/released/confirmed hold returns an appropriate response.
+    - Does not accidentally release seats belonging to another hold.
+    """
+    from backend.app.seats_service import (
+        release_hold_orm,
+        HoldNotFoundError,
+        HoldAlreadyReleasedError,
+        HoldExpiredError,
+        HoldError,
+    )
+
+    try:
+        result = release_hold_orm(session=db, hold_identifier=id)
+        return result
+    except HoldNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=e.message,
+        )
+    except HoldAlreadyReleasedError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=e.message,
+        )
+    except HoldExpiredError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=e.message,
+        )
+    except HoldError as e:
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=e.message,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to release hold: {str(e)}",
+        )
+
+

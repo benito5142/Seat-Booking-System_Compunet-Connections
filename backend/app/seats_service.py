@@ -25,6 +25,16 @@ class HoldExpiredError(HoldError):
     def __init__(self, message: str = "Hold has expired and cannot be confirmed", status_code: int = 400):
         super().__init__(message, status_code=status_code)
 
+class HoldNotFoundError(HoldError):
+    """Raised when a hold with the given ID or token is not found."""
+    def __init__(self, message: str = "Hold not found", status_code: int = 404):
+        super().__init__(message, status_code=status_code)
+
+class HoldAlreadyReleasedError(HoldError):
+    """Raised when an operation is attempted on an already released hold."""
+    def __init__(self, message: str = "Hold has already been released", status_code: int = 400):
+        super().__init__(message, status_code=status_code)
+
 def get_seats_from_dbapi(cursor, now_dt: Optional[datetime] = None) -> List[Dict[str, Any]]:
     """
     Fetches all 120 seats from the database and determines their effective status.
@@ -395,6 +405,8 @@ def create_hold_dbapi(
             conn.commit()
 
         return {
+            "id": hold_id,
+            "hold_id": hold_id,
             "hold_token": hold_token,
             "seats": sorted_seat_ids,
             "expires_at": expires_at.isoformat() + "Z",
@@ -515,6 +527,8 @@ def create_hold_orm(
         session.commit()
 
         return {
+            "id": hold.id,
+            "hold_id": hold.id,
             "hold_token": hold_token,
             "seats": sorted_seat_ids,
             "expires_at": expires_at.isoformat() + "Z",
@@ -766,6 +780,9 @@ def confirm_hold_dbapi(
         if str(h_status).upper() == "CONFIRMED":
             raise HoldError("Hold has already been confirmed into a booking", status_code=400)
 
+        if str(h_status).upper() == "RELEASED":
+            raise HoldError("Hold has been released and cannot be confirmed", status_code=400)
+
         if str(h_status).upper() != "ACTIVE":
             raise HoldError(f"Hold is not active (status: {h_status})", status_code=400)
 
@@ -905,6 +922,9 @@ def confirm_hold_orm(
         if hold.status == HoldStatus.CONFIRMED:
             raise HoldError("Hold has already been confirmed into a booking", status_code=400)
 
+        if hold.status == HoldStatus.RELEASED:
+            raise HoldError("Hold has been released and cannot be confirmed", status_code=400)
+
         if hold.status != HoldStatus.ACTIVE:
             raise HoldError(f"Hold is not active (status: {hold.status})", status_code=400)
 
@@ -963,4 +983,260 @@ def confirm_hold_orm(
     except Exception as e:
         session.rollback()
         raise e
+
+def release_hold_dbapi(
+    conn_or_cursor,
+    hold_identifier: str,
+    now_dt: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """
+    Atomically releases an active hold, making all its associated seats available again.
+
+    Guarantees & Invariants:
+    1. Transactional safety: runs in a single transaction with row-level locks.
+    2. Idempotency & validation:
+       - Invalid/non-existent hold raises HoldNotFoundError (HTTP 404).
+       - Already released hold raises HoldAlreadyReleasedError (HTTP 400).
+       - Already confirmed hold raises HoldError (HTTP 400).
+       - Expired hold raises HoldExpiredError (HTTP 400).
+    3. Releasing an active hold transitions hold status to 'RELEASED'.
+    4. Only seats belonging to this specific hold that are currently 'HELD' are reverted to 'AVAILABLE'.
+       Seats belonging to any other hold or already booked seats are NEVER modified.
+    5. A released hold cannot later be confirmed into a booking.
+    """
+    if now_dt is None:
+        now_dt = datetime.utcnow()
+    now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    if not hold_identifier or not str(hold_identifier).strip():
+        raise HoldNotFoundError("Hold identifier must be specified", status_code=404)
+
+    clean_id = str(hold_identifier).strip()
+
+    if hasattr(conn_or_cursor, "cursor"):
+        conn = conn_or_cursor
+        cursor = conn.cursor()
+    else:
+        cursor = conn_or_cursor
+        conn = getattr(cursor, "connection", None)
+
+    is_sqlite = False
+    if conn is not None and type(conn).__module__.startswith("sqlite3"):
+        is_sqlite = True
+
+    try:
+        if conn and is_sqlite:
+            try:
+                cursor.execute("BEGIN IMMEDIATE")
+            except Exception:
+                pass
+
+        for_update = "" if is_sqlite else " FOR UPDATE"
+
+        is_numeric = clean_id.isdigit()
+        if is_numeric:
+            cursor.execute(
+                f"SELECT id, hold_token, status, expires_at FROM holds WHERE id = ? OR hold_token = ?{for_update}",
+                (int(clean_id), clean_id),
+            )
+        else:
+            cursor.execute(
+                f"SELECT id, hold_token, status, expires_at FROM holds WHERE hold_token = ?{for_update}",
+                (clean_id,),
+            )
+
+        row = cursor.fetchone()
+        if not row:
+            raise HoldNotFoundError(f"Hold not found for identifier: {clean_id}", status_code=404)
+
+        if isinstance(row, (tuple, list)):
+            hold_id, h_tok, h_status, h_expires_at = row[:4]
+        else:
+            hold_id = row["id"]
+            h_tok = row["hold_token"]
+            h_status = row["status"]
+            h_expires_at = row["expires_at"]
+
+        # Parse expires_at if string
+        if isinstance(h_expires_at, str):
+            try:
+                exp_dt = datetime.fromisoformat(h_expires_at.replace("Z", "+00:00").split("+")[0])
+            except ValueError:
+                exp_dt = datetime.strptime(h_expires_at[:19], "%Y-%m-%d %H:%M:%S")
+        elif isinstance(h_expires_at, datetime):
+            exp_dt = h_expires_at
+        else:
+            exp_dt = None
+
+        status_upper = str(h_status).upper()
+        if status_upper == "RELEASED":
+            raise HoldAlreadyReleasedError(f"Hold {clean_id} has already been released", status_code=400)
+
+        if status_upper == "CONFIRMED":
+            raise HoldError(f"Hold {clean_id} has already been confirmed and cannot be released", status_code=400)
+
+        if status_upper == "EXPIRED" or (exp_dt and exp_dt <= now_dt):
+            cursor.execute("UPDATE holds SET status = 'EXPIRED', updated_at = ? WHERE id = ?", (now_str, hold_id))
+            cursor.execute(
+                """
+                UPDATE seats 
+                SET status = 'AVAILABLE', version = version + 1, updated_at = ? 
+                WHERE status = 'HELD' 
+                  AND id IN (
+                      SELECT seat_id FROM hold_seats WHERE hold_id = ?
+                  )
+                """,
+                (now_str, hold_id),
+            )
+            if conn:
+                conn.commit()
+            raise HoldExpiredError(f"Hold {clean_id} has expired and cannot be released", status_code=400)
+
+        if status_upper != "ACTIVE":
+            raise HoldError(f"Hold {clean_id} is not active (status: {h_status})", status_code=400)
+
+        # Retrieve the seat IDs specifically belonging to this hold
+        cursor.execute(
+            f"""
+            SELECT hs.seat_id, s.status 
+            FROM hold_seats hs
+            JOIN seats s ON hs.seat_id = s.id
+            WHERE hs.hold_id = ?
+            ORDER BY s.id ASC{for_update}
+            """,
+            (hold_id,),
+        )
+        seat_rows = cursor.fetchall()
+        held_seat_ids = []
+        for sr in seat_rows:
+            sid = sr[0] if isinstance(sr, (tuple, list)) else sr["seat_id"]
+            stat = sr[1] if isinstance(sr, (tuple, list)) else sr["status"]
+            if str(stat).upper() == "HELD":
+                held_seat_ids.append(sid)
+
+        # Update seat statuses to AVAILABLE strictly for this hold's seats
+        if held_seat_ids:
+            placeholders = ",".join(["?"] * len(held_seat_ids))
+            cursor.execute(
+                f"""
+                UPDATE seats 
+                SET status = 'AVAILABLE', version = version + 1, updated_at = ? 
+                WHERE status = 'HELD' AND id IN ({placeholders})
+                """,
+                [now_str] + held_seat_ids,
+            )
+
+        # Mark hold as RELEASED
+        cursor.execute(
+            "UPDATE holds SET status = 'RELEASED', updated_at = ? WHERE id = ?",
+            (now_str, hold_id),
+        )
+
+        if conn:
+            conn.commit()
+
+        return {
+            "message": "Hold successfully released",
+            "hold_id": hold_id,
+            "hold_token": h_tok,
+            "status": "released",
+            "released_seats": held_seat_ids,
+        }
+
+    except HoldError:
+        if conn:
+            conn.rollback()
+        raise
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        raise e
+
+def release_hold_orm(
+    session,
+    hold_identifier: str,
+    now_dt: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """
+    Atomically releases an active hold using SQLAlchemy ORM.
+    """
+    from backend.app.models import (
+        Seat,
+        Hold,
+        HoldSeat,
+        SeatStatus,
+        HoldStatus,
+    )
+    from sqlalchemy import or_
+
+    if now_dt is None:
+        now_dt = datetime.utcnow()
+
+    if not hold_identifier or not str(hold_identifier).strip():
+        raise HoldNotFoundError("Hold identifier must be specified", status_code=404)
+
+    clean_id = str(hold_identifier).strip()
+
+    try:
+        query = session.query(Hold)
+        if clean_id.isdigit():
+            query = query.filter(or_(Hold.id == int(clean_id), Hold.hold_token == clean_id))
+        else:
+            query = query.filter(Hold.hold_token == clean_id)
+
+        hold = query.with_for_update().first()
+        if not hold:
+            raise HoldNotFoundError(f"Hold not found for identifier: {clean_id}", status_code=404)
+
+        if hold.status == HoldStatus.RELEASED:
+            raise HoldAlreadyReleasedError(f"Hold {clean_id} has already been released", status_code=400)
+
+        if hold.status == HoldStatus.CONFIRMED:
+            raise HoldError(f"Hold {clean_id} has already been confirmed and cannot be released", status_code=400)
+
+        # Check expiration
+        is_expired = False
+        if hold.status == HoldStatus.EXPIRED:
+            is_expired = True
+        elif hold.expires_at <= now_dt:
+            is_expired = True
+
+        if is_expired:
+            hold.status = HoldStatus.EXPIRED
+            for hs in hold.hold_seats:
+                if hs.seat and hs.seat.status == SeatStatus.HELD:
+                    hs.seat.status = SeatStatus.AVAILABLE
+                    hs.seat.version += 1
+            session.commit()
+            raise HoldExpiredError(f"Hold {clean_id} has expired and cannot be released", status_code=400)
+
+        if hold.status != HoldStatus.ACTIVE:
+            raise HoldError(f"Hold {clean_id} is not active (status: {hold.status})", status_code=400)
+
+        # Revert seats to AVAILABLE strictly for this hold
+        released_seats = []
+        for hs in hold.hold_seats:
+            if hs.seat and hs.seat.status == SeatStatus.HELD:
+                hs.seat.status = SeatStatus.AVAILABLE
+                hs.seat.version += 1
+                released_seats.append(hs.seat.id)
+
+        hold.status = HoldStatus.RELEASED
+        session.commit()
+
+        return {
+            "message": "Hold successfully released",
+            "hold_id": hold.id,
+            "hold_token": hold.hold_token,
+            "status": "released",
+            "released_seats": sorted(released_seats),
+        }
+
+    except HoldError:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        raise e
+
 
