@@ -1,7 +1,7 @@
 // Frontend configuration for API endpoints and fixed event specifications
 
 export const API_BASE_URL =
-  import.meta.env.VITE_API_URL || 'http://localhost:8000';
+  import.meta.env.VITE_API_URL || '';
 
 export const EVENT_SPEC = {
   name: 'Main Event',
