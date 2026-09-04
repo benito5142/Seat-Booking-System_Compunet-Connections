@@ -18,7 +18,8 @@ seat-booking-system/
 │   │   ├── database.py       # SQLAlchemy MySQL engine & session management
 │   │   ├── main.py           # FastAPI entry point & CORS configuration
 │   │   ├── models.py         # SQLAlchemy ORM models (seats, holds, bookings)
-│   │   └── seed.py           # Fixed 120-seat seeder (A1-A12 to J1-J12)
+│   │   ├── seed.py           # Fixed 120-seat seeder (A1-A12 to J1-J12)
+│   │   └── seats_service.py  # Seat retrieval & hold expiration logic
 │   ├── .env.example          # Backend environment variables template
 │   ├── pytest.ini            # Pytest test runner configuration
 │   ├── requirements.txt      # Python dependencies
@@ -35,7 +36,8 @@ seat-booking-system/
 │   ├── conftest.py           # Pytest fixtures and TestClient setup
 │   ├── test_config.py        # Tests for configuration and specifications
 │   ├── test_main.py          # API route tests
-│   └── test_schema.py        # Schema, constraints, and concurrency tests
+│   ├── test_schema.py        # Schema, constraints, and concurrency tests
+│   └── test_seats.py         # 120-seat map & hold expiration tests
 ├── pytest.ini                # Root pytest configuration
 └── README.md                 # Project documentation
 ```

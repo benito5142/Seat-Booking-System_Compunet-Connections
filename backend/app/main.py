@@ -1,6 +1,11 @@
-from fastapi import FastAPI
+"""
+FastAPI application definition and router endpoints.
+"""
+from typing import List, Optional
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from backend.app.config import settings
+from backend.app.database import get_db
 
 app = FastAPI(
     title="Seat Booking System API",
@@ -51,3 +56,27 @@ def get_event_info():
             "total_seats": settings.TOTAL_SEATS,
         },
     }
+
+@app.get("/seats")
+def get_seats(db = Depends(get_db)):
+    """
+    Returns the complete 10 x 12 seat map (exactly 120 seats).
+    
+    Each seat includes:
+    - id: seat ID (e.g. 'A1', 'J12')
+    - row: row identifier ('A' through 'J')
+    - seat_number: number within row (1 through 12)
+    - status: 'available' | 'held' | 'booked'
+    
+    The database is the source of truth.
+    Expired holds are dynamically evaluated and reflected as 'available'.
+    """
+    from backend.app.seats_service import get_seats_from_orm
+    try:
+        seats = get_seats_from_orm(db)
+        return seats
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve seats from database: {str(e)}",
+        )

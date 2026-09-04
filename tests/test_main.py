@@ -36,3 +36,22 @@ def test_cors_preflight(client):
     assert response.status_code == 200
     assert "access-control-allow-origin" in response.headers
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+def test_get_seats_endpoint_returns_120_seats(client):
+    """Test that GET /seats returns exactly 120 seats matching the 10x12 venue map."""
+    response = client.get("/seats")
+    assert response.status_code == 200
+    seats = response.json()
+    assert isinstance(seats, list)
+    assert len(seats) == 120
+
+    # Validate structure and required fields
+    valid_statuses = {"available", "held", "booked"}
+    for seat in seats:
+        assert "id" in seat
+        assert "row" in seat
+        assert "seat_number" in seat
+        assert "status" in seat
+        assert seat["status"] in valid_statuses
+        assert seat["row"] in ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
+        assert 1 <= seat["seat_number"] <= 12
