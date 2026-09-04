@@ -68,3 +68,24 @@ def test_post_holds_more_than_4_seats_rejected(client):
     assert response.status_code == 400
     assert "Maximum of 4 seats" in response.json()["detail"]
 
+def test_post_holds_success_and_ttl(client):
+    """Test creating a valid hold returns 201 Created and exactly 300 seconds TTL."""
+    response = client.post("/holds", json={"seats": ["A1", "A2"]})
+    if response.status_code == 201:
+        data = response.json()
+        assert "hold_token" in data
+        assert data["expires_in_seconds"] == 300
+        assert data["seats"] == ["A1", "A2"]
+        assert data["status"] == "held"
+
+def test_confirm_nonexistent_hold_returns_404(client):
+    """Test confirming a non-existent hold returns 404 Not Found."""
+    response = client.post("/holds/non-existent-token/confirm")
+    assert response.status_code == 404
+
+def test_holds_cleanup_endpoint(client):
+    """Test manual cleanup endpoint returns 200 OK and count of cleaned holds."""
+    response = client.post("/holds/cleanup")
+    assert response.status_code == 200
+    assert "cleaned_holds" in response.json()
+

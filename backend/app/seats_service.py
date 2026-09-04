@@ -20,6 +20,11 @@ class SeatUnavailableError(HoldError):
         super().__init__(message, status_code=409)
         self.unavailable_seats = unavailable_seats
 
+class HoldExpiredError(HoldError):
+    """Raised when an operation (such as confirmation) is attempted on an expired hold."""
+    def __init__(self, message: str = "Hold has expired and cannot be confirmed", status_code: int = 400):
+        super().__init__(message, status_code=status_code)
+
 def get_seats_from_dbapi(cursor, now_dt: Optional[datetime] = None) -> List[Dict[str, Any]]:
     """
     Fetches all 120 seats from the database and determines their effective status.
@@ -515,6 +520,440 @@ def create_hold_orm(
             "expires_at": expires_at.isoformat() + "Z",
             "expires_in_seconds": 300,
             "status": "held",
+            "user_id": user_id,
+        }
+
+    except HoldError:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        raise e
+
+def cleanup_expired_holds_dbapi(
+    conn_or_cursor,
+    now_dt: Optional[datetime] = None,
+) -> int:
+    """
+    Finds and cleans up all active holds whose 5-minute expiration time has passed.
+
+    Transaction Safety:
+    - Runs in a single transaction with exclusive locks.
+    - Updates holds: status -> 'EXPIRED'.
+    - Updates seats: reverts status from 'HELD' -> 'AVAILABLE' only for seats
+      currently in 'HELD' state (never reverts 'BOOKED' seats).
+    - Increments seat version and updates timestamp.
+    - Commits transaction.
+    - Returns the count of expired holds cleaned up.
+    """
+    if now_dt is None:
+        now_dt = datetime.utcnow()
+    now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Determine connection and cursor
+    if hasattr(conn_or_cursor, "cursor"):
+        conn = conn_or_cursor
+        cursor = conn.cursor()
+    else:
+        cursor = conn_or_cursor
+        conn = getattr(cursor, "connection", None)
+
+    is_sqlite = False
+    if conn is not None and type(conn).__module__.startswith("sqlite3"):
+        is_sqlite = True
+
+    try:
+        if conn and is_sqlite:
+            try:
+                cursor.execute("BEGIN IMMEDIATE")
+            except Exception:
+                pass
+
+        for_update = "" if is_sqlite else " FOR UPDATE"
+        cursor.execute(
+            f"SELECT id, expires_at FROM holds WHERE status = 'ACTIVE'{for_update}"
+        )
+        rows = cursor.fetchall()
+        expired_ids = []
+        for r in rows:
+            if isinstance(r, (tuple, list)):
+                h_id, exp_val = r[0], r[1]
+            else:
+                h_id = r["id"]
+                exp_val = r["expires_at"]
+
+            if isinstance(exp_val, str):
+                try:
+                    exp_dt = datetime.fromisoformat(exp_val.replace("Z", "+00:00").split("+")[0])
+                except ValueError:
+                    exp_dt = datetime.strptime(exp_val[:19], "%Y-%m-%d %H:%M:%S")
+            elif isinstance(exp_val, datetime):
+                exp_dt = exp_val
+            else:
+                exp_dt = None
+
+            if exp_dt and exp_dt <= now_dt:
+                expired_ids.append(h_id)
+
+        if not expired_ids:
+            return 0
+
+        placeholders = ",".join(["?"] * len(expired_ids))
+        cursor.execute(
+            f"UPDATE holds SET status = 'EXPIRED', updated_at = ? WHERE id IN ({placeholders})",
+            [now_str] + expired_ids,
+        )
+        cursor.execute(
+            f"""
+            UPDATE seats 
+            SET status = 'AVAILABLE', version = version + 1, updated_at = ? 
+            WHERE status = 'HELD' 
+              AND id IN (
+                  SELECT seat_id FROM hold_seats WHERE hold_id IN ({placeholders})
+              )
+            """,
+            [now_str] + expired_ids,
+        )
+
+        if conn:
+            conn.commit()
+
+        return len(expired_ids)
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        raise e
+
+def cleanup_expired_holds_orm(
+    session,
+    now_dt: Optional[datetime] = None,
+) -> int:
+    """
+    Cleans up expired active holds using SQLAlchemy ORM with row locks and transaction safety.
+    """
+    from backend.app.models import Seat, Hold, HoldSeat, SeatStatus, HoldStatus
+
+    if now_dt is None:
+        now_dt = datetime.utcnow()
+
+    try:
+        expired_holds = (
+            session.query(Hold)
+            .filter(Hold.status == HoldStatus.ACTIVE, Hold.expires_at <= now_dt)
+            .with_for_update()
+            .all()
+        )
+
+        if not expired_holds:
+            return 0
+
+        expired_count = len(expired_holds)
+        for hold in expired_holds:
+            hold.status = HoldStatus.EXPIRED
+            for hs in hold.hold_seats:
+                if hs.seat and hs.seat.status == SeatStatus.HELD:
+                    hs.seat.status = SeatStatus.AVAILABLE
+                    hs.seat.version += 1
+
+        session.commit()
+        return expired_count
+    except Exception as e:
+        session.rollback()
+        raise e
+
+def confirm_hold_dbapi(
+    conn_or_cursor,
+    hold_token: str,
+    user_id: str = "default_user",
+    now_dt: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """
+    Atomically confirms an active seat hold into a completed booking.
+
+    Guarantees & Constraints:
+    1. An expired hold (expires_at <= now or status == 'EXPIRED') CANNOT be confirmed.
+       Raises HoldExpiredError (HTTP 400).
+    2. Expired holds trigger cleanup reverting held seats to 'AVAILABLE'.
+    3. Non-existent hold raises InvalidSeatRequestError (HTTP 404).
+    4. Already confirmed hold raises HoldError (HTTP 400).
+    5. Valid active hold creates a unique booking reference (BK-XXXXXXXX),
+       associates seats in booking_seats, sets seat status to 'BOOKED',
+       and sets hold status to 'CONFIRMED'.
+    """
+    if now_dt is None:
+        now_dt = datetime.utcnow()
+    now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    if not hold_token or not str(hold_token).strip():
+        raise InvalidSeatRequestError("Hold token must be specified", status_code=400)
+
+    clean_token = str(hold_token).strip()
+
+    if hasattr(conn_or_cursor, "cursor"):
+        conn = conn_or_cursor
+        cursor = conn.cursor()
+    else:
+        cursor = conn_or_cursor
+        conn = getattr(cursor, "connection", None)
+
+    is_sqlite = False
+    if conn is not None and type(conn).__module__.startswith("sqlite3"):
+        is_sqlite = True
+
+    try:
+        if conn and is_sqlite:
+            try:
+                cursor.execute("BEGIN IMMEDIATE")
+            except Exception:
+                pass
+
+        for_update = "" if is_sqlite else " FOR UPDATE"
+        cursor.execute(
+            f"SELECT id, hold_token, status, expires_at FROM holds WHERE hold_token = ?{for_update}",
+            (clean_token,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise InvalidSeatRequestError(f"Hold not found for token: {clean_token}", status_code=404)
+
+        if isinstance(row, (tuple, list)):
+            hold_id, h_tok, h_status, h_expires_at = row[:4]
+        else:
+            hold_id = row["id"]
+            h_tok = row["hold_token"]
+            h_status = row["status"]
+            h_expires_at = row["expires_at"]
+
+        # Parse expires_at
+        if isinstance(h_expires_at, str):
+            try:
+                exp_dt = datetime.fromisoformat(h_expires_at.replace("Z", "+00:00").split("+")[0])
+            except ValueError:
+                exp_dt = datetime.strptime(h_expires_at[:19], "%Y-%m-%d %H:%M:%S")
+        elif isinstance(h_expires_at, datetime):
+            exp_dt = h_expires_at
+        else:
+            exp_dt = None
+
+        # Check expiration
+        is_expired = False
+        if str(h_status).upper() == "EXPIRED":
+            is_expired = True
+        elif exp_dt and exp_dt <= now_dt:
+            is_expired = True
+
+        if is_expired:
+            # Clean up the expired hold and its seats
+            cursor.execute(
+                "UPDATE holds SET status = 'EXPIRED', updated_at = ? WHERE id = ?",
+                (now_str, hold_id),
+            )
+            cursor.execute(
+                """
+                UPDATE seats 
+                SET status = 'AVAILABLE', version = version + 1, updated_at = ? 
+                WHERE status = 'HELD' 
+                  AND id IN (
+                      SELECT seat_id FROM hold_seats WHERE hold_id = ?
+                  )
+                """,
+                (now_str, hold_id),
+            )
+            if conn:
+                conn.commit()
+            raise HoldExpiredError("Hold has expired and cannot be confirmed", status_code=400)
+
+        if str(h_status).upper() == "CONFIRMED":
+            raise HoldError("Hold has already been confirmed into a booking", status_code=400)
+
+        if str(h_status).upper() != "ACTIVE":
+            raise HoldError(f"Hold is not active (status: {h_status})", status_code=400)
+
+        # Retrieve and lock the associated seats
+        cursor.execute(
+            f"""
+            SELECT hs.seat_id, s.status 
+            FROM hold_seats hs 
+            JOIN seats s ON hs.seat_id = s.id 
+            WHERE hs.hold_id = ? 
+            ORDER BY s.id ASC{for_update}
+            """,
+            (hold_id,),
+        )
+        seat_rows = cursor.fetchall()
+        if not seat_rows:
+            raise InvalidSeatRequestError("No seats associated with this hold", status_code=400)
+
+        seat_ids = []
+        for sr in seat_rows:
+            sid = sr[0] if isinstance(sr, (tuple, list)) else sr["seat_id"]
+            stat = sr[1] if isinstance(sr, (tuple, list)) else sr["status"]
+            if str(stat).upper() != "HELD":
+                raise SeatUnavailableError(
+                    f"Seat {sid} is no longer held (status: {stat})",
+                    unavailable_seats=[sid],
+                )
+            seat_ids.append(sid)
+
+        # Check if booking already exists for this hold
+        cursor.execute("SELECT id FROM bookings WHERE hold_id = ?", (hold_id,))
+        if cursor.fetchone():
+            raise HoldError("Booking already exists for this hold", status_code=400)
+
+        # Create confirmed booking
+        booking_reference = f"BK-{uuid.uuid4().hex[:8].upper()}"
+        cursor.execute(
+            """
+            INSERT INTO bookings (booking_reference, hold_id, status, confirmed_at, created_at, updated_at) 
+            VALUES (?, ?, 'CONFIRMED', ?, ?, ?)
+            """,
+            (booking_reference, hold_id, now_str, now_str, now_str),
+        )
+        booking_id = cursor.lastrowid
+
+        for sid in seat_ids:
+            cursor.execute(
+                "INSERT INTO booking_seats (booking_id, seat_id, created_at) VALUES (?, ?, ?)",
+                (booking_id, sid, now_str),
+            )
+            cursor.execute(
+                "UPDATE seats SET status = 'BOOKED', version = version + 1, updated_at = ? WHERE id = ?",
+                (now_str, sid),
+            )
+
+        # Mark hold as CONFIRMED
+        cursor.execute(
+            "UPDATE holds SET status = 'CONFIRMED', updated_at = ? WHERE id = ?",
+            (now_str, hold_id),
+        )
+
+        if conn:
+            conn.commit()
+
+        return {
+            "booking_reference": booking_reference,
+            "hold_token": clean_token,
+            "seats": seat_ids,
+            "status": "confirmed",
+            "confirmed_at": now_dt.isoformat() + "Z",
+            "user_id": user_id,
+        }
+
+    except HoldError:
+        if conn:
+            conn.rollback()
+        raise
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        raise e
+
+def confirm_hold_orm(
+    session,
+    hold_token: str,
+    user_id: str = "default_user",
+    now_dt: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """
+    Atomically confirms an active seat hold into a completed booking using SQLAlchemy ORM.
+    """
+    from backend.app.models import (
+        Seat,
+        Hold,
+        HoldSeat,
+        Booking,
+        BookingSeat,
+        SeatStatus,
+        HoldStatus,
+        BookingStatus,
+    )
+
+    if now_dt is None:
+        now_dt = datetime.utcnow()
+
+    if not hold_token or not str(hold_token).strip():
+        raise InvalidSeatRequestError("Hold token must be specified", status_code=400)
+
+    clean_token = str(hold_token).strip()
+
+    try:
+        hold = (
+            session.query(Hold)
+            .filter(Hold.hold_token == clean_token)
+            .with_for_update()
+            .first()
+        )
+        if not hold:
+            raise InvalidSeatRequestError(f"Hold not found for token: {clean_token}", status_code=404)
+
+        # Check expiration
+        is_expired = False
+        if hold.status == HoldStatus.EXPIRED:
+            is_expired = True
+        elif hold.expires_at <= now_dt:
+            is_expired = True
+
+        if is_expired:
+            hold.status = HoldStatus.EXPIRED
+            for hs in hold.hold_seats:
+                if hs.seat and hs.seat.status == SeatStatus.HELD:
+                    hs.seat.status = SeatStatus.AVAILABLE
+                    hs.seat.version += 1
+            session.commit()
+            raise HoldExpiredError("Hold has expired and cannot be confirmed", status_code=400)
+
+        if hold.status == HoldStatus.CONFIRMED:
+            raise HoldError("Hold has already been confirmed into a booking", status_code=400)
+
+        if hold.status != HoldStatus.ACTIVE:
+            raise HoldError(f"Hold is not active (status: {hold.status})", status_code=400)
+
+        # Verify and lock seats
+        hold_seats = hold.hold_seats
+        if not hold_seats:
+            raise InvalidSeatRequestError("No seats associated with this hold", status_code=400)
+
+        seat_ids = sorted([hs.seat_id for hs in hold_seats])
+        seats = (
+            session.query(Seat)
+            .filter(Seat.id.in_(seat_ids))
+            .order_by(Seat.id.asc())
+            .with_for_update()
+            .all()
+        )
+
+        for s in seats:
+            if s.status != SeatStatus.HELD:
+                raise SeatUnavailableError(
+                    f"Seat {s.id} is no longer held (status: {s.status})",
+                    unavailable_seats=[s.id],
+                )
+
+        # Create booking
+        booking_reference = f"BK-{uuid.uuid4().hex[:8].upper()}"
+        booking = Booking(
+            booking_reference=booking_reference,
+            hold_id=hold.id,
+            status=BookingStatus.CONFIRMED,
+            confirmed_at=now_dt,
+        )
+        session.add(booking)
+        session.flush()
+
+        for s in seats:
+            session.add(BookingSeat(booking_id=booking.id, seat_id=s.id))
+            s.status = SeatStatus.BOOKED
+            s.version += 1
+
+        hold.status = HoldStatus.CONFIRMED
+        session.commit()
+
+        return {
+            "booking_reference": booking_reference,
+            "hold_token": clean_token,
+            "seats": seat_ids,
+            "status": "confirmed",
+            "confirmed_at": now_dt.isoformat() + "Z",
             "user_id": user_id,
         }
 

@@ -1,6 +1,8 @@
 """
 FastAPI application definition and router endpoints.
 """
+import asyncio
+from contextlib import asynccontextmanager
 from typing import List, Optional
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,10 +10,45 @@ from pydantic import BaseModel, Field
 from backend.app.config import settings
 from backend.app.database import get_db
 
+async def periodic_cleanup_loop(interval_seconds: int = 15):
+    """
+    Lightweight background loop that periodically sweeps and cleans up expired holds.
+    Requires zero external queue or cache infrastructure (no Redis, Celery, Kafka, or cron).
+    Complements active on-access lazy cleanup to ensure the database remains clean.
+    """
+    from backend.app.database import SessionLocal
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            if SessionLocal is not None:
+                db = SessionLocal()
+                try:
+                    from backend.app.seats_service import cleanup_expired_holds_orm
+                    cleanup_expired_holds_orm(db)
+                finally:
+                    db.close()
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            pass
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start background cleanup task
+    cleanup_task = asyncio.create_task(periodic_cleanup_loop(interval_seconds=15))
+    yield
+    # Graceful shutdown
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
+
 app = FastAPI(
     title="Seat Booking System API",
     description="Backend API for single-event seat booking system (10 rows x 12 seats = 120 total seats)",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 class HoldRequest(BaseModel):
@@ -19,6 +56,11 @@ class HoldRequest(BaseModel):
     seats: Optional[List[str]] = Field(default=None, description="List of seat IDs to hold (max 4)")
     seat_ids: Optional[List[str]] = Field(default=None, description="Alternative key for seat IDs list")
     user_id: Optional[str] = Field(default="default_user", description="Identifier for holding user")
+
+class ConfirmHoldRequest(BaseModel):
+    """Payload for confirming a hold into a booking."""
+    hold_token: Optional[str] = Field(default=None, description="Hold token to confirm")
+    user_id: Optional[str] = Field(default="default_user", description="Identifier for booking user")
 
 # CORS configuration to enable communication between React frontend and FastAPI backend
 app.add_middleware(
@@ -141,4 +183,84 @@ def create_hold(payload: HoldRequest, db = Depends(get_db)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create seat hold: {str(e)}",
         )
+
+@app.post("/holds/{hold_token}/confirm", status_code=status.HTTP_201_CREATED)
+def confirm_hold_endpoint(
+    hold_token: str,
+    payload: Optional[ConfirmHoldRequest] = None,
+    db = Depends(get_db),
+):
+    """
+    Atomically confirms an active hold into a completed booking.
+
+    Guarantees:
+    - An expired hold CANNOT be confirmed. Returns HTTP 400 Bad Request.
+    - An expired hold triggers cleanup so its seats become available again.
+    - If valid, transitions hold to 'CONFIRMED' and seats to 'BOOKED'.
+    """
+    from backend.app.seats_service import (
+        confirm_hold_orm,
+        HoldExpiredError,
+        HoldError,
+        InvalidSeatRequestError,
+        SeatUnavailableError,
+    )
+
+    user_id = payload.user_id if payload and payload.user_id else "default_user"
+
+    try:
+        booking = confirm_hold_orm(session=db, hold_token=hold_token, user_id=user_id)
+        return booking
+    except HoldExpiredError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=e.message,
+        )
+    except InvalidSeatRequestError as e:
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=e.message,
+        )
+    except SeatUnavailableError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": e.message,
+                "unavailable_seats": e.unavailable_seats,
+            },
+        )
+    except HoldError as e:
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=e.message,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to confirm hold: {str(e)}",
+        )
+
+@app.post("/bookings", status_code=status.HTTP_201_CREATED)
+def create_booking_endpoint(
+    payload: ConfirmHoldRequest,
+    db = Depends(get_db),
+):
+    """
+    Alternative endpoint to confirm a booking using hold_token in request body.
+    """
+    if not payload.hold_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="hold_token is required to confirm a booking",
+        )
+    return confirm_hold_endpoint(hold_token=payload.hold_token, payload=payload, db=db)
+
+@app.post("/holds/cleanup", status_code=status.HTTP_200_OK)
+def cleanup_holds_endpoint(db = Depends(get_db)):
+    """
+    Explicitly triggers cleanup of expired holds and releases their seats to AVAILABLE.
+    """
+    from backend.app.seats_service import cleanup_expired_holds_orm
+    cleaned = cleanup_expired_holds_orm(db)
+    return {"status": "ok", "cleaned_holds": cleaned}
 
