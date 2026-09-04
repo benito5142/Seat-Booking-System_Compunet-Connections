@@ -887,11 +887,14 @@ def confirm_hold_dbapi(
         return {
             "booking_reference": booking_reference,
             "booking_id": booking_id,
+            "id": booking_id,
             "hold_id": h_id,
             "hold_token": h_tok,
             "seats": seat_ids,
+            "booked_seats": seat_ids,
             "status": "confirmed",
             "confirmed_at": now_dt.isoformat() + "Z",
+            "created_at": now_dt.isoformat() + "Z",
             "user_id": user_id,
         }
 
@@ -1043,11 +1046,14 @@ def confirm_hold_orm(
         return {
             "booking_reference": booking_reference,
             "booking_id": booking.id,
+            "id": booking.id,
             "hold_id": hold.id,
             "hold_token": hold.hold_token,
             "seats": seat_ids,
+            "booked_seats": seat_ids,
             "status": "confirmed",
             "confirmed_at": now_dt.isoformat() + "Z",
+            "created_at": now_dt.isoformat() + "Z",
             "user_id": user_id,
         }
 
@@ -1315,5 +1321,110 @@ def release_hold_orm(
     except Exception as e:
         session.rollback()
         raise e
+
+
+def _format_iso_timestamp(dt_val: Any) -> Optional[str]:
+    """Formats a datetime or string representation into a clean ISO 8601 string."""
+    if dt_val is None:
+        return None
+    if isinstance(dt_val, datetime):
+        return dt_val.isoformat() + ("Z" if not dt_val.tzinfo else "")
+    if isinstance(dt_val, str):
+        val = dt_val.strip()
+        if not val:
+            return None
+        if "T" in val:
+            return val if (val.endswith("Z") or "+" in val) else f"{val}Z"
+        # Standard SQL format "YYYY-MM-DD HH:MM:SS" -> "YYYY-MM-DDTHH:MM:SSZ"
+        return val.replace(" ", "T") + "Z"
+    return str(dt_val)
+
+
+def get_bookings_dbapi(conn_or_cursor) -> List[Dict[str, Any]]:
+    """
+    Returns the bookings created by the system from DBAPI / SQLite.
+    Each booking includes:
+    - booking ID
+    - booking reference
+    - booked seats
+    - booking creation timestamp
+    """
+    if hasattr(conn_or_cursor, "cursor"):
+        cursor = conn_or_cursor.cursor()
+    else:
+        cursor = conn_or_cursor
+
+    query = """
+    SELECT 
+        b.id,
+        b.booking_reference,
+        b.hold_id,
+        b.status,
+        b.created_at,
+        b.confirmed_at,
+        bs.seat_id
+    FROM bookings b
+    LEFT JOIN booking_seats bs ON b.id = bs.booking_id
+    ORDER BY b.id ASC, bs.seat_id ASC
+    """
+    cursor.execute(query)
+    rows = cursor.fetchall()
+
+    bookings_map: Dict[int, Dict[str, Any]] = {}
+    for row in rows:
+        if isinstance(row, (tuple, list)):
+            b_id, b_ref, h_id, b_status, created_at, confirmed_at, seat_id = row[:7]
+        else:
+            b_id = row["id"]
+            b_ref = row["booking_reference"]
+            h_id = row["hold_id"]
+            b_status = row["status"]
+            created_at = row["created_at"]
+            confirmed_at = row["confirmed_at"]
+            seat_id = row["seat_id"]
+
+        if b_id not in bookings_map:
+            ts = _format_iso_timestamp(created_at or confirmed_at)
+            bookings_map[b_id] = {
+                "id": b_id,
+                "booking_id": b_id,
+                "booking_reference": b_ref,
+                "seats": [],
+                "booked_seats": [],
+                "created_at": ts,
+            }
+        if seat_id:
+            bookings_map[b_id]["seats"].append(seat_id)
+            bookings_map[b_id]["booked_seats"].append(seat_id)
+
+    return list(bookings_map.values())
+
+
+def get_bookings_orm(session) -> List[Dict[str, Any]]:
+    """
+    Returns the bookings created by the system using SQLAlchemy ORM.
+    Each booking includes:
+    - booking ID
+    - booking reference
+    - booked seats
+    - booking creation timestamp
+    """
+    from backend.app.models import Booking
+    bookings = session.query(Booking).order_by(Booking.id.asc()).all()
+    results = []
+    for b in bookings:
+        seat_ids = [bs.seat_id for bs in b.booking_seats] if b.booking_seats else []
+        seat_ids.sort()
+        ts = _format_iso_timestamp(b.created_at or b.confirmed_at)
+        results.append({
+            "id": b.id,
+            "booking_id": b.id,
+            "booking_reference": b.booking_reference,
+            "seats": seat_ids,
+            "booked_seats": seat_ids,
+            "created_at": ts,
+        })
+    return results
+
 
 

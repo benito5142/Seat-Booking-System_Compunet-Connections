@@ -355,6 +355,25 @@ def create_booking_endpoint(
             detail=f"Failed to confirm booking: {str(e)}",
         )
 
+@app.get("/bookings", status_code=status.HTTP_200_OK)
+def get_bookings_endpoint(db = Depends(get_db)):
+    """
+    Returns the bookings created by the system.
+    Each booking includes:
+    - booking ID
+    - booking reference
+    - booked seats
+    - booking creation timestamp
+    """
+    from backend.app.seats_service import get_bookings_orm
+    try:
+        return get_bookings_orm(session=db)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch bookings: {str(e)}",
+        )
+
 @app.post("/holds/cleanup", status_code=status.HTTP_200_OK)
 def cleanup_holds_endpoint(db = Depends(get_db)):
     """

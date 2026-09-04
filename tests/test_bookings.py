@@ -11,6 +11,7 @@ from backend.app.seats_service import (
     confirm_hold_dbapi,
     release_hold_dbapi,
     get_seats_from_dbapi,
+    get_bookings_dbapi,
     HoldNotFoundError,
     HoldExpiredError,
     HoldAlreadyReleasedError,
@@ -307,3 +308,79 @@ class TestBookingsConfirmation(unittest.TestCase):
         finally:
             if os.path.exists(db_path):
                 os.remove(db_path)
+
+    def test_get_bookings_initially_empty(self):
+        """Proves: GET /bookings returns an empty list when no bookings exist."""
+        bookings = get_bookings_dbapi(self.conn)
+        self.assertIsInstance(bookings, list)
+        self.assertEqual(len(bookings), 0)
+
+    def test_confirmed_hold_appears_in_get_bookings(self):
+        """
+        Proves: A confirmed hold appears in GET /bookings with:
+        - booking ID (id / booking_id)
+        - booking reference (booking_reference)
+        - booked seats (seats / booked_seats)
+        - booking creation timestamp (created_at)
+        """
+        t0 = datetime(2026, 9, 4, 12, 0, 0)
+        seats_to_hold = ["I1", "I2"]
+        hold = create_hold_dbapi(self.conn, seats_to_hold, user_id="isabel", now_dt=t0)
+        hold_id = hold["hold_id"]
+
+        # Confirm the hold into a booking
+        t_confirm = t0 + timedelta(minutes=1)
+        confirmed_booking = confirm_hold_dbapi(self.conn, hold_id=hold_id, user_id="isabel", now_dt=t_confirm)
+        booking_ref = confirmed_booking["booking_reference"]
+        booking_id = confirmed_booking["booking_id"]
+
+        # Retrieve all bookings
+        bookings = get_bookings_dbapi(self.conn)
+        self.assertIsInstance(bookings, list)
+        self.assertEqual(len(bookings), 1)
+
+        b = bookings[0]
+
+        # 1. Booking ID
+        self.assertEqual(b["id"], booking_id)
+        self.assertEqual(b["booking_id"], booking_id)
+
+        # 2. Booking Reference
+        self.assertEqual(b["booking_reference"], booking_ref)
+        self.assertTrue(b["booking_reference"].startswith("BK-"))
+
+        # 3. Booked seats
+        self.assertEqual(sorted(b["seats"]), sorted(seats_to_hold))
+        self.assertEqual(sorted(b["booked_seats"]), sorted(seats_to_hold))
+
+        # 4. Booking creation timestamp
+        self.assertIn("created_at", b)
+        self.assertIsNotNone(b["created_at"])
+        self.assertTrue(len(b["created_at"]) > 0)
+        # Verify timestamp contains the expected date/time ISO representation
+        self.assertIn("2026-09-04", b["created_at"])
+
+    def test_multiple_confirmed_holds_appear_in_get_bookings(self):
+        """Proves: Multiple confirmed holds appear in GET /bookings with separate records."""
+        t0 = datetime(2026, 9, 4, 12, 0, 0)
+        
+        # Booking 1
+        h1 = create_hold_dbapi(self.conn, ["J1", "J2"], user_id="user_1", now_dt=t0)
+        b1 = confirm_hold_dbapi(self.conn, hold_id=h1["hold_id"], user_id="user_1", now_dt=t0 + timedelta(seconds=10))
+
+        # Booking 2
+        h2 = create_hold_dbapi(self.conn, ["J3", "J4", "J5"], user_id="user_2", now_dt=t0 + timedelta(seconds=20))
+        b2 = confirm_hold_dbapi(self.conn, hold_id=h2["hold_id"], user_id="user_2", now_dt=t0 + timedelta(seconds=30))
+
+        bookings = get_bookings_dbapi(self.conn)
+        self.assertEqual(len(bookings), 2)
+
+        booking_refs = {b["booking_reference"] for b in bookings}
+        self.assertIn(b1["booking_reference"], booking_refs)
+        self.assertIn(b2["booking_reference"], booking_refs)
+
+        # Map by reference
+        by_ref = {b["booking_reference"]: b for b in bookings}
+        self.assertEqual(sorted(by_ref[b1["booking_reference"]]["seats"]), ["J1", "J2"])
+        self.assertEqual(sorted(by_ref[b2["booking_reference"]]["seats"]), ["J3", "J4", "J5"])
+
