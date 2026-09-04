@@ -1,6 +1,6 @@
 {
   "name": "Seat Booking System",
-  "description": "Seat booking system with FastAPI backend, MySQL database with row-level locking, and React frontend for a 120-seat event.",
+  "description": "Seat booking system with Node.js Express backend and React frontend for a 120-seat event.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

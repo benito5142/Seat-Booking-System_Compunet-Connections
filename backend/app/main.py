@@ -1,115 +1,101 @@
 import asyncio
-import logging
 from contextlib import asynccontextmanager
-from typing import List, Union
-
-from fastapi import FastAPI, Depends, HTTPException, status
+from typing import List, Optional
+from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from backend.app.config import settings
-from backend.app.database import get_db, check_db_connection, SessionLocal
+from backend.app.database import engine, get_db, Base, SessionLocal
 from backend.app.seed import seed_seats
 from backend.app.schemas import (
-    SeatResponse,
-    HoldRequest,
+    SeatOut,
+    HoldCreateRequest,
     HoldResponse,
-    BookingRequest,
+    HoldReleaseResponse,
+    BookingCreateRequest,
     BookingResponse,
-    ReleaseResponse,
     HealthResponse,
     EventInfoResponse,
+    SeatMapSpec,
 )
-from backend.app import seats_service
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+from backend.app.seats_service import (
+    get_all_seats,
+    create_hold,
+    release_hold,
+    confirm_hold_and_create_booking,
+    get_all_bookings,
+    cleanup_expired_holds,
 )
-logger = logging.getLogger("seat_booking.main")
 
-
-async def background_hold_cleaner():
-    """Background task running every 15 seconds to expire stale holds."""
+async def periodic_hold_cleanup():
+    """Background task to automatically expire holds older than 5 minutes."""
     while True:
         try:
-            await asyncio.sleep(15)
             db = SessionLocal()
             try:
-                cleaned = seats_service.cleanup_expired_holds(db)
-                if cleaned > 0:
-                    logger.info(f"Background cleaner expired {cleaned} hold(s)")
+                cleanup_expired_holds(db)
             finally:
                 db.close()
-        except asyncio.CancelledError:
-            break
         except Exception as e:
-            logger.error(f"Error in background hold cleaner: {e}")
-
+            print(f"Error during background hold cleanup: {e}")
+        await asyncio.sleep(15)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: seed tables and seats
-    logger.info("Starting Seat Booking System backend...")
+    # Startup: ensure tables exist and seed predefined 120 seats
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
     try:
-        seed_seats()
-    except Exception as e:
-        logger.error(f"Error during database initialization/seeding: {e}")
+        seed_seats(db)
+    finally:
+        db.close()
 
-    # Launch background expiration cleaner
-    cleaner_task = asyncio.create_task(background_hold_cleaner())
+    # Start background cleanup worker
+    cleanup_task = asyncio.create_task(periodic_hold_cleanup())
     yield
     # Shutdown
-    cleaner_task.cancel()
+    cleanup_task.cancel()
     try:
-        await cleaner_task
+        await cleanup_task
     except asyncio.CancelledError:
         pass
-    logger.info("Backend shutdown complete.")
-
 
 app = FastAPI(
-    title="Seat Booking System API",
-    description="FastAPI + MySQL backend for 120-seat event booking with strict concurrency protection.",
+    title="Seat Booking System",
+    description="FastAPI + MySQL Seat Booking API for a 120-seat event with row-level locking",
     version="1.0.0",
     lifespan=lifespan,
 )
 
-# CORS configuration
+# CORS Configuration
+origins = settings.cors_origins_list
+if not origins or "*" in origins:
+    origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origin_list,
-    allow_credentials=True,
+    allow_origins=origins if origins != ["*"] else ["*"],
+    allow_credentials=True if origins != ["*"] else False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-
-@app.get("/")
-def root():
-    return {
-        "message": "Seat Booking System API is running",
-        "backend": "FastAPI + Python",
-        "database": "MySQL",
-        "event_spec": {
-            "total_rows": settings.total_rows,
-            "seats_per_row": settings.seats_per_row,
-            "total_seats": settings.total_seats,
-        },
-        "status": "ready",
-    }
-
-
 @app.get("/api/health", response_model=HealthResponse)
-def health_check():
-    db_ok = check_db_connection()
-    return {
-        "status": "ok" if db_ok else "degraded",
-        "service": "seat-booking-backend",
-        "database": "connected" if db_ok else "disconnected",
-        "environment": settings.app_env,
-    }
+def health_check(db: Session = Depends(get_db)):
+    try:
+        # Check DB connection
+        db.execute(Base.metadata.tables["seats"].select().limit(1))
+        db_status = "connected"
+    except Exception as e:
+        db_status = f"error: {str(e)}"
 
+    return {
+        "status": "ok",
+        "service": "seat-booking-backend",
+        "database": db_status,
+        "environment": settings.APP_ENV,
+    }
 
 @app.get("/api/event/info", response_model=EventInfoResponse)
 def event_info():
@@ -117,58 +103,54 @@ def event_info():
         "event_id": 1,
         "name": "Main Event",
         "seat_map": {
-            "rows": settings.total_rows,
-            "seats_per_row": settings.seats_per_row,
-            "total_seats": settings.total_seats,
+            "rows": settings.TOTAL_ROWS,
+            "seats_per_row": settings.SEATS_PER_ROW,
+            "total_seats": settings.TOTAL_SEATS,
         },
     }
 
-
-@app.get("/seats", response_model=List[SeatResponse])
+@app.get("/seats", response_model=List[SeatOut])
 def list_seats(db: Session = Depends(get_db)):
-    """Return the complete seat map with current status."""
-    return seats_service.get_all_seats(db)
-
+    """Returns all 120 seats with current status (available, held, booked)."""
+    return get_all_seats(db)
 
 @app.post("/holds", response_model=HoldResponse, status_code=status.HTTP_201_CREATED)
-def create_seat_hold(req: HoldRequest, db: Session = Depends(get_db)):
-    """Create a hold on up to 4 seats atomically with row-level locking."""
-    raw_seats = req.seats or req.seat_ids or []
-    return seats_service.create_hold(db, seat_ids=raw_seats, user_id=req.user_id or "default_user")
+def make_hold(request: HoldCreateRequest, db: Session = Depends(get_db)):
+    """
+    Atomically holds 1-4 seats using SELECT ... FOR UPDATE.
+    All-or-nothing: fails if any seat is unavailable.
+    """
+    return create_hold(db, seat_ids=request.seats, user_id=request.user_id or "default_user")
 
-
-@app.delete("/holds/{id}", response_model=ReleaseResponse)
+@app.delete("/holds/{id}", response_model=HoldReleaseResponse)
 def release_seat_hold(id: str, db: Session = Depends(get_db)):
-    """Release an existing hold."""
-    return seats_service.release_hold(db, identifier=id)
-
+    """Releases an active hold, returning its seats to available."""
+    return release_hold(db, hold_identifier=id)
 
 @app.post("/holds/{hold_token}/confirm", response_model=BookingResponse, status_code=status.HTTP_201_CREATED)
-def confirm_hold_by_token(hold_token: str, req: BookingRequest = BookingRequest(), db: Session = Depends(get_db)):
-    """Confirm hold via token URL parameter."""
-    return seats_service.confirm_hold(db, identifier=hold_token, user_id=req.user_id)
-
+def confirm_hold_by_token(hold_token: str, request: Optional[BookingCreateRequest] = None, db: Session = Depends(get_db)):
+    """Confirms hold identified by token parameter."""
+    user_id = request.user_id if request else "default_user"
+    return confirm_hold_and_create_booking(db, hold_identifier=hold_token, user_id=user_id)
 
 @app.post("/bookings", response_model=BookingResponse, status_code=status.HTTP_201_CREATED)
-def create_booking(req: BookingRequest, db: Session = Depends(get_db)):
-    """Confirm an active hold and create a booking."""
-    identifier = req.hold_id or req.holdId or req.hold_token
+def create_booking(request: BookingCreateRequest, db: Session = Depends(get_db)):
+    """Confirms active hold and creates a booking."""
+    identifier = request.hold_id or request.hold_token
     if not identifier:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="hold_id is required to create a booking",
         )
-    return seats_service.confirm_hold(db, identifier=identifier, user_id=req.user_id)
-
+    return confirm_hold_and_create_booking(db, hold_identifier=str(identifier), user_id=request.user_id)
 
 @app.get("/bookings", response_model=List[BookingResponse])
 def list_bookings(db: Session = Depends(get_db)):
-    """List existing bookings."""
-    return seats_service.get_all_bookings(db)
-
+    """Lists all confirmed bookings."""
+    return get_all_bookings(db)
 
 @app.post("/holds/cleanup")
-def cleanup_holds_manual(db: Session = Depends(get_db)):
-    """Manual cleanup trigger for expired holds."""
-    cleaned = seats_service.cleanup_expired_holds(db)
+def trigger_cleanup(db: Session = Depends(get_db)):
+    """Manually triggers expiration sweep."""
+    cleaned = cleanup_expired_holds(db)
     return {"status": "ok", "cleaned_holds": cleaned}

@@ -1,47 +1,43 @@
-import logging
-from sqlalchemy import text
-from backend.app.database import engine, Base
+from sqlalchemy.orm import Session
+from backend.app.database import SessionLocal, engine, Base
 from backend.app.models import Seat
+from backend.app.seats_service import VALID_ROWS, SEATS_PER_ROW
 
-logger = logging.getLogger("seat_booking.seed")
+def seed_seats(db: Session) -> int:
+    """
+    Seeds exactly 120 seats: A1-A12 through J1-J12.
+    Idempotent: inserts missing seats, preserves existing ones.
+    """
+    existing_seats = {s.id: s for s in db.query(Seat).all()}
+    created_count = 0
 
-ROW_LABELS = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
-SEATS_PER_ROW = 12
-TOTAL_SEATS = 120
+    for row in VALID_ROWS:
+        for num in range(1, SEATS_PER_ROW + 1):
+            seat_id = f"{row}{num}"
+            if seat_id not in existing_seats:
+                new_seat = Seat(
+                    id=seat_id,
+                    row_letter=row,
+                    seat_number=num,
+                    status="available",
+                )
+                db.add(new_seat)
+                created_count += 1
 
+    if created_count > 0:
+        db.commit()
 
-def seed_seats():
-    """Initializes tables and seeds the 120 predefined seats if not present."""
-    logger.info("Initializing database schema...")
+    return created_count
+
+def main():
     Base.metadata.create_all(bind=engine)
-
-    with engine.connect() as conn:
-        result = conn.execute(text("SELECT COUNT(*) FROM seats"))
-        count = result.scalar()
-        if count == 0:
-            logger.info(f"Seeding {TOTAL_SEATS} seats...")
-            values = []
-            for row in ROW_LABELS:
-                for num in range(1, SEATS_PER_ROW + 1):
-                    seat_id = f"{row}{num}"
-                    values.append({
-                        "id": seat_id,
-                        "row_label": row,
-                        "seat_number": num,
-                        "status": "available",
-                    })
-            
-            insert_stmt = text(
-                "INSERT INTO seats (id, row_label, seat_number, status) "
-                "VALUES (:id, :row_label, :seat_number, :status)"
-            )
-            conn.execute(insert_stmt, values)
-            conn.commit()
-            logger.info(f"Successfully seeded {len(values)} seats.")
-        else:
-            logger.info(f"Database already contains {count} seats.")
-
+    db = SessionLocal()
+    try:
+        count = seed_seats(db)
+        total = db.query(Seat).count()
+        print(f"Seeded {count} new seats. Total seats in database: {total}")
+    finally:
+        db.close()
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    seed_seats()
+    main()

@@ -111,13 +111,13 @@ export default function App() {
           {loading ? (
             <div className="p-4 bg-slate-50 rounded-lg text-xs text-slate-600 flex items-center">
               <span className="w-2 h-2 rounded-full bg-amber-400 mr-2 animate-pulse" />
-              Connecting to FastAPI backend...
+              Connecting to backend service...
             </div>
           ) : health ? (
             <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 flex items-start space-x-2.5">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
               <div>
-                <span className="font-semibold">FastAPI Connected:</span>{' '}
+                <span className="font-semibold">Backend Connected:</span>{' '}
                 {health.status} ({health.service})
               </div>
             </div>
@@ -129,12 +129,6 @@ export default function App() {
                   Backend offline or awaiting start:
                 </span>{' '}
                 {error || 'No active connection'}.
-                <div className="mt-1 text-slate-500">
-                  Start the FastAPI backend with:{' '}
-                  <code className="font-mono bg-slate-200 px-1 rounded">
-                    uvicorn backend.app.main:app --reload
-                  </code>
-                </div>
               </div>
             </div>
           )}

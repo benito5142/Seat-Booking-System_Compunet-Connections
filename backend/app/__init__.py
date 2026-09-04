@@ -1,1 +1,1 @@
-"""Seat Booking System - Backend Application Package"""
+"""Backend app package."""

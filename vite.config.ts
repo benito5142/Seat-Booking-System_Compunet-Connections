@@ -14,24 +14,6 @@ export default defineConfig(() => {
     server: {
       port: 3000,
       host: '0.0.0.0',
-      proxy: {
-        '/api': {
-          target: 'http://127.0.0.1:8000',
-          changeOrigin: true,
-        },
-        '/seats': {
-          target: 'http://127.0.0.1:8000',
-          changeOrigin: true,
-        },
-        '/holds': {
-          target: 'http://127.0.0.1:8000',
-          changeOrigin: true,
-        },
-        '/bookings': {
-          target: 'http://127.0.0.1:8000',
-          changeOrigin: true,
-        },
-      },
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
