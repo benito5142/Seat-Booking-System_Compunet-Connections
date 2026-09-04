@@ -59,6 +59,9 @@ class HoldRequest(BaseModel):
 
 class ConfirmHoldRequest(BaseModel):
     """Payload for confirming a hold into a booking."""
+    hold_id: Optional[Union[int, str]] = Field(default=None, description="Hold ID to confirm")
+    holdId: Optional[Union[int, str]] = Field(default=None, description="Hold ID (camelCase)")
+    id: Optional[Union[int, str]] = Field(default=None, description="Hold ID")
     hold_token: Optional[str] = Field(default=None, description="Hold token to confirm")
     user_id: Optional[str] = Field(default="default_user", description="Identifier for booking user")
 
@@ -201,6 +204,8 @@ def confirm_hold_endpoint(
     from backend.app.seats_service import (
         confirm_hold_orm,
         HoldExpiredError,
+        HoldNotFoundError,
+        HoldAlreadyReleasedError,
         HoldError,
         InvalidSeatRequestError,
         SeatUnavailableError,
@@ -209,8 +214,18 @@ def confirm_hold_endpoint(
     user_id = payload.user_id if payload and payload.user_id else "default_user"
 
     try:
-        booking = confirm_hold_orm(session=db, hold_token=hold_token, user_id=user_id)
+        booking = confirm_hold_orm(session=db, hold_identifier=hold_token, user_id=user_id)
         return booking
+    except HoldNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=e.message,
+        )
+    except HoldAlreadyReleasedError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=e.message,
+        )
     except HoldExpiredError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -242,18 +257,103 @@ def confirm_hold_endpoint(
 
 @app.post("/bookings", status_code=status.HTTP_201_CREATED)
 def create_booking_endpoint(
-    payload: ConfirmHoldRequest,
+    payload: Optional[ConfirmHoldRequest] = None,
+    hold_id: Optional[Union[int, str]] = None,
     db = Depends(get_db),
 ):
     """
-    Alternative endpoint to confirm a booking using hold_token in request body.
+    Atomically confirms an active hold into a completed booking.
+    Receives a hold ID and confirms that hold.
+
+    Requirements:
+    - Hold must exist (HTTP 404).
+    - Hold must still be active.
+    - Hold must not be expired (HTTP 400).
+    - Hold must not already be confirmed (HTTP 400).
+    - Released hold cannot be confirmed (HTTP 400).
+    - All seats associated with the hold must still belong to that hold (HTTP 409).
+    - Convert those seats to booked.
+    - Create exactly one booking.
+    - Generate a unique booking reference code.
+    - Prevent the same hold from being confirmed twice.
+    - Proper database transaction: rolls back on failure with no partially booked seats.
     """
-    if not payload.hold_token:
+    from backend.app.seats_service import (
+        confirm_hold_orm,
+        HoldExpiredError,
+        HoldNotFoundError,
+        HoldAlreadyReleasedError,
+        HoldError,
+        InvalidSeatRequestError,
+        SeatUnavailableError,
+    )
+
+    raw_id = None
+    user_id = "default_user"
+    if payload:
+        raw_id = (
+            payload.hold_id
+            if payload.hold_id is not None
+            else (
+                payload.holdId
+                if payload.holdId is not None
+                else (payload.id if payload.id is not None else payload.hold_token)
+            )
+        )
+        if payload.user_id:
+            user_id = payload.user_id
+    if raw_id is None and hold_id is not None:
+        raw_id = hold_id
+
+    if raw_id is None or not str(raw_id).strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="hold_token is required to confirm a booking",
+            detail="hold_id is required to create a booking",
         )
-    return confirm_hold_endpoint(hold_token=payload.hold_token, payload=payload, db=db)
+
+    clean_id = str(raw_id).strip()
+
+    try:
+        booking = confirm_hold_orm(session=db, hold_identifier=clean_id, user_id=user_id)
+        return booking
+    except HoldNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=e.message,
+        )
+    except HoldAlreadyReleasedError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=e.message,
+        )
+    except HoldExpiredError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=e.message,
+        )
+    except InvalidSeatRequestError as e:
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=e.message,
+        )
+    except SeatUnavailableError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": e.message,
+                "unavailable_seats": e.unavailable_seats,
+            },
+        )
+    except HoldError as e:
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=e.message,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to confirm booking: {str(e)}",
+        )
 
 @app.post("/holds/cleanup", status_code=status.HTTP_200_OK)
 def cleanup_holds_endpoint(db = Depends(get_db)):

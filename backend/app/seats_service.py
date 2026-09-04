@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 import uuid
-from typing import List, Dict, Any, Optional
+import sqlite3
+from typing import List, Dict, Any, Optional, Union
 
 class HoldError(Exception):
     """Base exception for seat hold operations."""
@@ -25,14 +26,14 @@ class HoldExpiredError(HoldError):
     def __init__(self, message: str = "Hold has expired and cannot be confirmed", status_code: int = 400):
         super().__init__(message, status_code=status_code)
 
-class HoldNotFoundError(HoldError):
+class HoldNotFoundError(InvalidSeatRequestError):
     """Raised when a hold with the given ID or token is not found."""
     def __init__(self, message: str = "Hold not found", status_code: int = 404):
         super().__init__(message, status_code=status_code)
 
 class HoldAlreadyReleasedError(HoldError):
     """Raised when an operation is attempted on an already released hold."""
-    def __init__(self, message: str = "Hold has already been released", status_code: int = 400):
+    def __init__(self, message: str = "Hold has already been released and cannot be confirmed", status_code: int = 400):
         super().__init__(message, status_code=status_code)
 
 def get_seats_from_dbapi(cursor, now_dt: Optional[datetime] = None) -> List[Dict[str, Any]]:
@@ -677,31 +678,37 @@ def cleanup_expired_holds_orm(
 
 def confirm_hold_dbapi(
     conn_or_cursor,
-    hold_token: str,
+    hold_token: Optional[Union[str, int]] = None,
     user_id: str = "default_user",
     now_dt: Optional[datetime] = None,
+    *,
+    hold_id: Optional[Union[str, int]] = None,
+    hold_identifier: Optional[Union[str, int]] = None,
 ) -> Dict[str, Any]:
     """
     Atomically confirms an active seat hold into a completed booking.
 
     Guarantees & Constraints:
-    1. An expired hold (expires_at <= now or status == 'EXPIRED') CANNOT be confirmed.
-       Raises HoldExpiredError (HTTP 400).
-    2. Expired holds trigger cleanup reverting held seats to 'AVAILABLE'.
-    3. Non-existent hold raises InvalidSeatRequestError (HTTP 404).
-    4. Already confirmed hold raises HoldError (HTTP 400).
-    5. Valid active hold creates a unique booking reference (BK-XXXXXXXX),
-       associates seats in booking_seats, sets seat status to 'BOOKED',
-       and sets hold status to 'CONFIRMED'.
+    1. Hold must exist (raises HoldNotFoundError 404).
+    2. Hold must still be active.
+    3. Hold must not be expired (raises HoldExpiredError 400 and cleans up seats).
+    4. Hold must not already be confirmed (raises HoldError 400).
+    5. Released hold cannot be confirmed (raises HoldAlreadyReleasedError 400).
+    6. All seats associated with the hold must still belong to that hold and be HELD.
+    7. Converts those seats to BOOKED.
+    8. Creates exactly one booking with a unique booking reference code (BK-XXXXXXXX).
+    9. Prevents duplicate confirmation with row locking and UNIQUE hold_id constraint.
+    10. Transactional: rolls back completely on any failure, leaving no partially booked seats.
     """
     if now_dt is None:
         now_dt = datetime.utcnow()
     now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
 
-    if not hold_token or not str(hold_token).strip():
-        raise InvalidSeatRequestError("Hold token must be specified", status_code=400)
+    raw_ident = hold_id if hold_id is not None else (hold_identifier if hold_identifier is not None else hold_token)
+    if raw_ident is None or not str(raw_ident).strip():
+        raise HoldNotFoundError("Hold identifier must be specified", status_code=404)
 
-    clean_token = str(hold_token).strip()
+    clean_token = str(raw_ident).strip()
 
     if hasattr(conn_or_cursor, "cursor"):
         conn = conn_or_cursor
@@ -722,18 +729,25 @@ def confirm_hold_dbapi(
                 pass
 
         for_update = "" if is_sqlite else " FOR UPDATE"
-        cursor.execute(
-            f"SELECT id, hold_token, status, expires_at FROM holds WHERE hold_token = ?{for_update}",
-            (clean_token,),
-        )
+        is_numeric = clean_token.isdigit()
+        if is_numeric:
+            cursor.execute(
+                f"SELECT id, hold_token, status, expires_at FROM holds WHERE id = ? OR hold_token = ?{for_update}",
+                (int(clean_token), clean_token),
+            )
+        else:
+            cursor.execute(
+                f"SELECT id, hold_token, status, expires_at FROM holds WHERE hold_token = ?{for_update}",
+                (clean_token,),
+            )
         row = cursor.fetchone()
         if not row:
-            raise InvalidSeatRequestError(f"Hold not found for token: {clean_token}", status_code=404)
+            raise HoldNotFoundError(f"Hold not found for identifier: {clean_token}", status_code=404)
 
         if isinstance(row, (tuple, list)):
-            hold_id, h_tok, h_status, h_expires_at = row[:4]
+            h_id, h_tok, h_status, h_expires_at = row[:4]
         else:
-            hold_id = row["id"]
+            h_id = row["id"]
             h_tok = row["hold_token"]
             h_status = row["status"]
             h_expires_at = row["expires_at"]
@@ -760,7 +774,7 @@ def confirm_hold_dbapi(
             # Clean up the expired hold and its seats
             cursor.execute(
                 "UPDATE holds SET status = 'EXPIRED', updated_at = ? WHERE id = ?",
-                (now_str, hold_id),
+                (now_str, h_id),
             )
             cursor.execute(
                 """
@@ -771,7 +785,7 @@ def confirm_hold_dbapi(
                       SELECT seat_id FROM hold_seats WHERE hold_id = ?
                   )
                 """,
-                (now_str, hold_id),
+                (now_str, h_id),
             )
             if conn:
                 conn.commit()
@@ -781,7 +795,7 @@ def confirm_hold_dbapi(
             raise HoldError("Hold has already been confirmed into a booking", status_code=400)
 
         if str(h_status).upper() == "RELEASED":
-            raise HoldError("Hold has been released and cannot be confirmed", status_code=400)
+            raise HoldAlreadyReleasedError("Hold has been released and cannot be confirmed", status_code=400)
 
         if str(h_status).upper() != "ACTIVE":
             raise HoldError(f"Hold is not active (status: {h_status})", status_code=400)
@@ -795,7 +809,7 @@ def confirm_hold_dbapi(
             WHERE hs.hold_id = ? 
             ORDER BY s.id ASC{for_update}
             """,
-            (hold_id,),
+            (h_id,),
         )
         seat_rows = cursor.fetchall()
         if not seat_rows:
@@ -813,18 +827,41 @@ def confirm_hold_dbapi(
             seat_ids.append(sid)
 
         # Check if booking already exists for this hold
-        cursor.execute("SELECT id FROM bookings WHERE hold_id = ?", (hold_id,))
+        cursor.execute("SELECT id FROM bookings WHERE hold_id = ?", (h_id,))
         if cursor.fetchone():
-            raise HoldError("Booking already exists for this hold", status_code=400)
+            raise HoldError("Hold has already been confirmed into a booking", status_code=400)
 
-        # Create confirmed booking
-        booking_reference = f"BK-{uuid.uuid4().hex[:8].upper()}"
+        # Check if any seat is already booked in booking_seats
+        placeholders = ",".join(["?"] * len(seat_ids))
+        cursor.execute(
+            f"SELECT seat_id FROM booking_seats WHERE seat_id IN ({placeholders})",
+            seat_ids,
+        )
+        already_booked = cursor.fetchall()
+        if already_booked:
+            booked_sids = [r[0] if isinstance(r, (tuple, list)) else r["seat_id"] for r in already_booked]
+            raise SeatUnavailableError(
+                f"Seats {booked_sids} are already booked",
+                unavailable_seats=booked_sids,
+            )
+
+        # Generate unique booking reference
+        booking_reference = None
+        for _ in range(10):
+            candidate_ref = f"BK-{uuid.uuid4().hex[:8].upper()}"
+            cursor.execute("SELECT id FROM bookings WHERE booking_reference = ?", (candidate_ref,))
+            if not cursor.fetchone():
+                booking_reference = candidate_ref
+                break
+        if not booking_reference:
+            booking_reference = f"BK-{uuid.uuid4().hex[:12].upper()}"
+
         cursor.execute(
             """
             INSERT INTO bookings (booking_reference, hold_id, status, confirmed_at, created_at, updated_at) 
             VALUES (?, ?, 'CONFIRMED', ?, ?, ?)
             """,
-            (booking_reference, hold_id, now_str, now_str, now_str),
+            (booking_reference, h_id, now_str, now_str, now_str),
         )
         booking_id = cursor.lastrowid
 
@@ -841,7 +878,7 @@ def confirm_hold_dbapi(
         # Mark hold as CONFIRMED
         cursor.execute(
             "UPDATE holds SET status = 'CONFIRMED', updated_at = ? WHERE id = ?",
-            (now_str, hold_id),
+            (now_str, h_id),
         )
 
         if conn:
@@ -849,13 +886,19 @@ def confirm_hold_dbapi(
 
         return {
             "booking_reference": booking_reference,
-            "hold_token": clean_token,
+            "booking_id": booking_id,
+            "hold_id": h_id,
+            "hold_token": h_tok,
             "seats": seat_ids,
             "status": "confirmed",
             "confirmed_at": now_dt.isoformat() + "Z",
             "user_id": user_id,
         }
 
+    except sqlite3.IntegrityError:
+        if conn:
+            conn.rollback()
+        raise HoldError("Hold has already been confirmed or duplicate booking detected", status_code=400)
     except HoldError:
         if conn:
             conn.rollback()
@@ -867,13 +910,18 @@ def confirm_hold_dbapi(
 
 def confirm_hold_orm(
     session,
-    hold_token: str,
+    hold_token: Optional[Union[str, int]] = None,
     user_id: str = "default_user",
     now_dt: Optional[datetime] = None,
+    *,
+    hold_id: Optional[Union[str, int]] = None,
+    hold_identifier: Optional[Union[str, int]] = None,
 ) -> Dict[str, Any]:
     """
     Atomically confirms an active seat hold into a completed booking using SQLAlchemy ORM.
     """
+    from sqlalchemy import or_
+    from sqlalchemy.exc import IntegrityError
     from backend.app.models import (
         Seat,
         Hold,
@@ -888,20 +936,22 @@ def confirm_hold_orm(
     if now_dt is None:
         now_dt = datetime.utcnow()
 
-    if not hold_token or not str(hold_token).strip():
-        raise InvalidSeatRequestError("Hold token must be specified", status_code=400)
+    raw_ident = hold_id if hold_id is not None else (hold_identifier if hold_identifier is not None else hold_token)
+    if raw_ident is None or not str(raw_ident).strip():
+        raise HoldNotFoundError("Hold identifier must be specified", status_code=404)
 
-    clean_token = str(hold_token).strip()
+    clean_token = str(raw_ident).strip()
 
     try:
-        hold = (
-            session.query(Hold)
-            .filter(Hold.hold_token == clean_token)
-            .with_for_update()
-            .first()
-        )
+        query = session.query(Hold)
+        if clean_token.isdigit():
+            query = query.filter(or_(Hold.id == int(clean_token), Hold.hold_token == clean_token))
+        else:
+            query = query.filter(Hold.hold_token == clean_token)
+
+        hold = query.with_for_update().first()
         if not hold:
-            raise InvalidSeatRequestError(f"Hold not found for token: {clean_token}", status_code=404)
+            raise HoldNotFoundError(f"Hold not found for identifier: {clean_token}", status_code=404)
 
         # Check expiration
         is_expired = False
@@ -923,10 +973,15 @@ def confirm_hold_orm(
             raise HoldError("Hold has already been confirmed into a booking", status_code=400)
 
         if hold.status == HoldStatus.RELEASED:
-            raise HoldError("Hold has been released and cannot be confirmed", status_code=400)
+            raise HoldAlreadyReleasedError("Hold has been released and cannot be confirmed", status_code=400)
 
         if hold.status != HoldStatus.ACTIVE:
             raise HoldError(f"Hold is not active (status: {hold.status})", status_code=400)
+
+        # Check if booking already exists for this hold
+        existing_booking = session.query(Booking).filter(Booking.hold_id == hold.id).first()
+        if existing_booking:
+            raise HoldError("Hold has already been confirmed into a booking", status_code=400)
 
         # Verify and lock seats
         hold_seats = hold.hold_seats
@@ -949,8 +1004,25 @@ def confirm_hold_orm(
                     unavailable_seats=[s.id],
                 )
 
-        # Create booking
-        booking_reference = f"BK-{uuid.uuid4().hex[:8].upper()}"
+        # Check if any seat is already booked in booking_seats
+        already_booked = session.query(BookingSeat).filter(BookingSeat.seat_id.in_(seat_ids)).all()
+        if already_booked:
+            booked_ids = [bs.seat_id for bs in already_booked]
+            raise SeatUnavailableError(
+                f"Seats {booked_ids} are already booked",
+                unavailable_seats=booked_ids,
+            )
+
+        # Generate unique booking reference
+        booking_reference = None
+        for _ in range(10):
+            candidate_ref = f"BK-{uuid.uuid4().hex[:8].upper()}"
+            if not session.query(Booking).filter(Booking.booking_reference == candidate_ref).first():
+                booking_reference = candidate_ref
+                break
+        if not booking_reference:
+            booking_reference = f"BK-{uuid.uuid4().hex[:12].upper()}"
+
         booking = Booking(
             booking_reference=booking_reference,
             hold_id=hold.id,
@@ -970,13 +1042,18 @@ def confirm_hold_orm(
 
         return {
             "booking_reference": booking_reference,
-            "hold_token": clean_token,
+            "booking_id": booking.id,
+            "hold_id": hold.id,
+            "hold_token": hold.hold_token,
             "seats": seat_ids,
             "status": "confirmed",
             "confirmed_at": now_dt.isoformat() + "Z",
             "user_id": user_id,
         }
 
+    except IntegrityError:
+        session.rollback()
+        raise HoldError("Hold has already been confirmed or duplicate booking detected", status_code=400)
     except HoldError:
         session.rollback()
         raise
