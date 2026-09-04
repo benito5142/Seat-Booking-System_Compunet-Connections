@@ -1,5 +1,24 @@
-from datetime import datetime
+from datetime import datetime, timedelta
+import uuid
 from typing import List, Dict, Any, Optional
+
+class HoldError(Exception):
+    """Base exception for seat hold operations."""
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+
+class InvalidSeatRequestError(HoldError):
+    """Raised when seat request validation fails (e.g. >4 seats, non-existent seat IDs)."""
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message, status_code)
+
+class SeatUnavailableError(HoldError):
+    """Raised when one or more requested seats are already held or booked."""
+    def __init__(self, message: str, unavailable_seats: List[str]):
+        super().__init__(message, status_code=409)
+        self.unavailable_seats = unavailable_seats
 
 def get_seats_from_dbapi(cursor, now_dt: Optional[datetime] = None) -> List[Dict[str, Any]]:
     """
@@ -180,3 +199,329 @@ def get_seats_from_orm(session, now_dt: Optional[datetime] = None) -> List[Dict[
         })
 
     return results
+
+def create_hold_dbapi(
+    conn_or_cursor,
+    seat_ids: List[str],
+    user_id: str = "default_user",
+    now_dt: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """
+    Atomically holds up to 4 seats using raw DBAPI / SQLite connection.
+
+    Concurrency Protection:
+    1. Validates requested seat count (1 to 4 seats).
+    2. Sorts seat IDs in consistent ascending order to prevent deadlocks.
+    3. Acquires row/table level lock on requested seats within a single transaction.
+    4. Evaluates and cleans up any expired holds on the requested seats.
+    5. Checks that every requested seat is currently AVAILABLE.
+    6. If any seat is unavailable (booked or actively held), rolls back immediately.
+    7. Atomically creates the hold (5-minute TTL), links hold seats, and updates seat status to HELD.
+    8. Commits the transaction.
+    """
+    if now_dt is None:
+        now_dt = datetime.utcnow()
+
+    # Step 1: Input validation
+    if not seat_ids:
+        raise InvalidSeatRequestError("At least one seat must be specified", status_code=400)
+
+    cleaned_ids = [str(s).strip().upper() for s in seat_ids if str(s).strip()]
+    if not cleaned_ids:
+        raise InvalidSeatRequestError("At least one seat must be specified", status_code=400)
+
+    unique_seat_ids = list(dict.fromkeys(cleaned_ids))
+    if len(unique_seat_ids) > 4:
+        raise InvalidSeatRequestError("Maximum of 4 seats can be held at once", status_code=400)
+
+    # Consistent locking order to prevent AB-BA deadlocks between concurrent requests
+    sorted_seat_ids = sorted(unique_seat_ids)
+
+    # Determine connection and cursor
+    if hasattr(conn_or_cursor, "cursor"):
+        conn = conn_or_cursor
+        cursor = conn.cursor()
+    else:
+        cursor = conn_or_cursor
+        conn = getattr(cursor, "connection", None)
+
+    # Detect if sqlite or mysql
+    is_sqlite = False
+    if conn is not None and type(conn).__module__.startswith("sqlite3"):
+        is_sqlite = True
+
+    try:
+        # Start transaction
+        if conn and is_sqlite:
+            try:
+                cursor.execute("BEGIN IMMEDIATE")
+            except Exception:
+                # May already be in an open transaction
+                pass
+
+        # Step 2: Lock seat rows in consistent order
+        placeholders = ",".join(["?"] * len(sorted_seat_ids))
+        for_update_clause = "" if is_sqlite else " FOR UPDATE"
+        query_seats = f"""
+        SELECT id, row_label, seat_number, status, version 
+        FROM seats 
+        WHERE id IN ({placeholders}) 
+        ORDER BY id ASC{for_update_clause}
+        """
+        cursor.execute(query_seats, sorted_seat_ids)
+        seat_rows = cursor.fetchall()
+
+        found_seat_map = {}
+        for row in seat_rows:
+            if isinstance(row, (tuple, list)):
+                s_id, s_row, s_num, s_stat, s_ver = row[:5]
+            else:
+                s_id = row["id"]
+                s_stat = row["status"]
+            found_seat_map[s_id] = str(s_stat).upper()
+
+        missing = [sid for sid in sorted_seat_ids if sid not in found_seat_map]
+        if missing:
+            raise InvalidSeatRequestError(f"Invalid seat ID(s): {', '.join(missing)}", status_code=400)
+
+        # Step 3: Account for expired holds on requested seats
+        query_active_holds = f"""
+        SELECT h.id, h.status, h.expires_at, hs.seat_id
+        FROM holds h
+        JOIN hold_seats hs ON h.id = hs.hold_id
+        WHERE hs.seat_id IN ({placeholders}) AND h.status = 'ACTIVE'{for_update_clause}
+        """
+        cursor.execute(query_active_holds, sorted_seat_ids)
+        hold_rows = cursor.fetchall()
+
+        expired_hold_ids = set()
+        active_held_seat_ids = set()
+
+        for row in hold_rows:
+            if isinstance(row, (tuple, list)):
+                h_id, h_status, h_expires_at, hs_seat_id = row[:4]
+            else:
+                h_id = row["id"]
+                h_status = row["status"]
+                h_expires_at = row["expires_at"]
+                hs_seat_id = row["seat_id"]
+
+            if isinstance(h_expires_at, str):
+                try:
+                    exp_dt = datetime.fromisoformat(h_expires_at.replace("Z", "+00:00").split("+")[0])
+                except ValueError:
+                    exp_dt = datetime.strptime(h_expires_at[:19], "%Y-%m-%d %H:%M:%S")
+            elif isinstance(h_expires_at, datetime):
+                exp_dt = h_expires_at
+            else:
+                exp_dt = None
+
+            if exp_dt and exp_dt <= now_dt:
+                expired_hold_ids.add(h_id)
+            else:
+                active_held_seat_ids.add(hs_seat_id)
+
+        # Clean up detected expired holds
+        if expired_hold_ids:
+            exp_placeholders = ",".join(["?"] * len(expired_hold_ids))
+            cursor.execute(
+                f"UPDATE holds SET status = 'EXPIRED' WHERE id IN ({exp_placeholders})",
+                list(expired_hold_ids),
+            )
+            cursor.execute(
+                f"""
+                UPDATE seats 
+                SET status = 'AVAILABLE' 
+                WHERE status = 'HELD' 
+                  AND id IN (
+                      SELECT seat_id FROM hold_seats WHERE hold_id IN ({exp_placeholders})
+                  )
+                """,
+                list(expired_hold_ids),
+            )
+            for sid in sorted_seat_ids:
+                if sid not in active_held_seat_ids and found_seat_map.get(sid) == "HELD":
+                    found_seat_map[sid] = "AVAILABLE"
+
+        # Step 4: Verify that EVERY requested seat is currently AVAILABLE
+        unavailable_seats = []
+        for sid in sorted_seat_ids:
+            current_status = found_seat_map.get(sid, "AVAILABLE")
+            if current_status == "BOOKED":
+                unavailable_seats.append(sid)
+            elif current_status == "HELD" or sid in active_held_seat_ids:
+                unavailable_seats.append(sid)
+
+        # All-or-nothing: if even one is unavailable, rollback and fail entire request!
+        if unavailable_seats:
+            if conn:
+                conn.rollback()
+            raise SeatUnavailableError(
+                f"One or more requested seats are unavailable: {', '.join(unavailable_seats)}",
+                unavailable_seats=unavailable_seats,
+            )
+
+        # Step 5: All requested seats are available -> create hold atomically
+        hold_token = uuid.uuid4().hex
+        expires_at = now_dt + timedelta(minutes=5)
+        expires_at_str = expires_at.strftime("%Y-%m-%d %H:%M:%S")
+        now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        cursor.execute(
+            """
+            INSERT INTO holds (hold_token, status, expires_at, created_at, updated_at) 
+            VALUES (?, 'ACTIVE', ?, ?, ?)
+            """,
+            (hold_token, expires_at_str, now_str, now_str),
+        )
+        hold_id = cursor.lastrowid
+
+        for sid in sorted_seat_ids:
+            cursor.execute(
+                "INSERT INTO hold_seats (hold_id, seat_id, created_at) VALUES (?, ?, ?)",
+                (hold_id, sid, now_str),
+            )
+            cursor.execute(
+                "UPDATE seats SET status = 'HELD', version = version + 1, updated_at = ? WHERE id = ?",
+                (now_str, sid),
+            )
+
+        if conn:
+            conn.commit()
+
+        return {
+            "hold_token": hold_token,
+            "seats": sorted_seat_ids,
+            "expires_at": expires_at.isoformat() + "Z",
+            "expires_in_seconds": 300,
+            "status": "held",
+            "user_id": user_id,
+        }
+
+    except HoldError:
+        if conn:
+            conn.rollback()
+        raise
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        raise e
+
+def create_hold_orm(
+    session,
+    seat_ids: List[str],
+    user_id: str = "default_user",
+    now_dt: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """
+    Atomically holds up to 4 seats using SQLAlchemy ORM with row-level locks.
+    """
+    from backend.app.models import Seat, Hold, HoldSeat, SeatStatus, HoldStatus
+
+    if now_dt is None:
+        now_dt = datetime.utcnow()
+
+    # Step 1: Input validation
+    if not seat_ids:
+        raise InvalidSeatRequestError("At least one seat must be specified", status_code=400)
+
+    cleaned_ids = [str(s).strip().upper() for s in seat_ids if str(s).strip()]
+    if not cleaned_ids:
+        raise InvalidSeatRequestError("At least one seat must be specified", status_code=400)
+
+    unique_seat_ids = list(dict.fromkeys(cleaned_ids))
+    if len(unique_seat_ids) > 4:
+        raise InvalidSeatRequestError("Maximum of 4 seats can be held at once", status_code=400)
+
+    # Consistent locking order
+    sorted_seat_ids = sorted(unique_seat_ids)
+
+    try:
+        # Step 2: Lock seat rows in consistent order using SELECT ... FOR UPDATE
+        seats = (
+            session.query(Seat)
+            .filter(Seat.id.in_(sorted_seat_ids))
+            .order_by(Seat.id.asc())
+            .with_for_update()
+            .all()
+        )
+
+        found_seat_map = {s.id: s for s in seats}
+        missing = [sid for sid in sorted_seat_ids if sid not in found_seat_map]
+        if missing:
+            raise InvalidSeatRequestError(f"Invalid seat ID(s): {', '.join(missing)}", status_code=400)
+
+        # Step 3: Check active holds on these seats with row locks
+        active_holds = (
+            session.query(Hold)
+            .join(HoldSeat)
+            .filter(HoldSeat.seat_id.in_(sorted_seat_ids), Hold.status == HoldStatus.ACTIVE)
+            .with_for_update()
+            .all()
+        )
+
+        active_held_seat_ids = set()
+        for hold in active_holds:
+            if hold.expires_at <= now_dt:
+                hold.status = HoldStatus.EXPIRED
+                for hs in hold.hold_seats:
+                    if hs.seat and hs.seat.status == SeatStatus.HELD:
+                        hs.seat.status = SeatStatus.AVAILABLE
+            else:
+                for hs in hold.hold_seats:
+                    if hs.seat_id in sorted_seat_ids:
+                        active_held_seat_ids.add(hs.seat_id)
+
+        # Step 4: Verify that EVERY requested seat is currently AVAILABLE
+        unavailable_seats = []
+        for sid in sorted_seat_ids:
+            seat = found_seat_map[sid]
+            if seat.status == SeatStatus.BOOKED:
+                unavailable_seats.append(sid)
+            elif seat.status == SeatStatus.HELD or sid in active_held_seat_ids:
+                unavailable_seats.append(sid)
+
+        # All-or-nothing: if any seat is unavailable, rollback immediately!
+        if unavailable_seats:
+            session.rollback()
+            raise SeatUnavailableError(
+                f"One or more requested seats are unavailable: {', '.join(unavailable_seats)}",
+                unavailable_seats=unavailable_seats,
+            )
+
+        # Step 5: All requested seats are available -> create hold atomically
+        hold_token = uuid.uuid4().hex
+        expires_at = now_dt + timedelta(minutes=5)
+
+        hold = Hold(
+            hold_token=hold_token,
+            status=HoldStatus.ACTIVE,
+            expires_at=expires_at,
+        )
+        session.add(hold)
+        session.flush()
+
+        for sid in sorted_seat_ids:
+            seat = found_seat_map[sid]
+            session.add(HoldSeat(hold_id=hold.id, seat_id=seat.id))
+            seat.status = SeatStatus.HELD
+            seat.version += 1
+
+        session.commit()
+
+        return {
+            "hold_token": hold_token,
+            "seats": sorted_seat_ids,
+            "expires_at": expires_at.isoformat() + "Z",
+            "expires_in_seconds": 300,
+            "status": "held",
+            "user_id": user_id,
+        }
+
+    except HoldError:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        raise e
+

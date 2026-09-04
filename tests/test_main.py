@@ -55,3 +55,16 @@ def test_get_seats_endpoint_returns_120_seats(client):
         assert seat["status"] in valid_statuses
         assert seat["row"] in ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
         assert 1 <= seat["seat_number"] <= 12
+
+def test_post_holds_empty_seats_rejected(client):
+    """Test that POST /holds with empty seat list returns 400 Bad Request."""
+    response = client.post("/holds", json={"seats": []})
+    assert response.status_code == 400
+    assert "At least one seat" in response.json()["detail"]
+
+def test_post_holds_more_than_4_seats_rejected(client):
+    """Test that POST /holds with > 4 seats returns 400 Bad Request."""
+    response = client.post("/holds", json={"seats": ["A1", "A2", "A3", "A4", "A5"]})
+    assert response.status_code == 400
+    assert "Maximum of 4 seats" in response.json()["detail"]
+

@@ -12,6 +12,13 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(settings.SEATS_PER_ROW, 12)
         self.assertEqual(settings.TOTAL_SEATS, 120)
 
+    def test_hold_specifications(self):
+        """Validates hold duration (5 mins) and max seat limits (4 seats)."""
+        settings = Settings()
+        self.assertEqual(settings.MAX_HOLD_SEATS, 4)
+        self.assertEqual(settings.HOLD_DURATION_MINUTES, 5)
+        self.assertEqual(settings.HOLD_DURATION_SECONDS, 300)
+
     def test_default_database_url_structure(self):
         """Validates MySQL URL construction using PyMySQL driver."""
         settings = Settings()

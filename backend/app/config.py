@@ -38,6 +38,11 @@ class Settings:
         self.SEATS_PER_ROW: int = 12
         self.TOTAL_SEATS: int = self.TOTAL_ROWS * self.SEATS_PER_ROW
 
+        # Hold Specifications
+        self.MAX_HOLD_SEATS: int = 4
+        self.HOLD_DURATION_MINUTES: int = 5
+        self.HOLD_DURATION_SECONDS: int = 300
+
     @property
     def DATABASE_URL(self) -> str:
         """Constructs the MySQL database connection URL using PyMySQL driver."""
