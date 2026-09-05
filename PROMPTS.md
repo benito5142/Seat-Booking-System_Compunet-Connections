@@ -1,6 +1,8 @@
-# AI-Assisted Development
+# AI-Assisted Development: Prompts, Failures, and Real Engineering Trajectory
 
-This document provides a comprehensive, transparent record of the prompts, architectural iterations, and corrections used during the development of the **Seat Booking System**.
+> *"On the prompts: we expect you to use AI tools, and using them well is a skill we're hiring for. So don't sanitise this — include the prompts that didn't work, what you changed, and where you overrode or corrected the output. A clean list of five perfect prompts tells us less than an honest one that shows how you actually got there."*
+
+This unified document provides an exhaustive, completely unsanitised record combining all initial system prompts, architectural design queries, failed iterations, edge-case bug fixes, and explicit engineer overrides during the development of the **Seat Booking System**.
 
 ---
 
@@ -363,4 +365,4 @@ And the user reported:
 | **Storage Engine Anti-Double-Booking** | README § Database Schema | "seat_id UNIQUE on booking_seats" | `backend/app/models.py` | Storage engine constraint verification |
 | **Two-Tier Expiration** | README § Hold Expiration | "Combine lazy expiration on request with automated background worker" | `backend/app/seats_service.py`, `backend/app/main.py` | `test_expiration.py`, `test_holds_cleanup_endpoint` |
 | **3-Second Polling & Stale Pruning** | README § Polling | "Implement polling every 3 seconds... dynamically prune taken seats" | `src/App.tsx` | UI verification and in-flight request lock |
-| **Demo Seat Reset** | Prompt.md & README § Demo Tools | "Add reset all seats button anywhere in the UI but not that much visible for project purpose" | `backend/app/main.py` (`POST /api/reset`), `src/api/client.ts`, `src/App.tsx` | `test_23_reset_all_seats_resets_everything_to_available` |
+| **Demo Seat Reset** | PROMPTS.md & README § Demo Tools | "Add reset all seats button anywhere in the UI but not that much visible for project purpose" | `backend/app/main.py` (`POST /api/reset`), `src/api/client.ts`, `src/App.tsx` | `test_23_reset_all_seats_resets_everything_to_available` |
