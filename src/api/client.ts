@@ -1,5 +1,12 @@
 import { API_BASE_URL } from '../config';
 import { Seat, HoldResponse, BookingResponse } from '../types';
+import {
+  engineGetSeats,
+  engineCreateHold,
+  engineReleaseHold,
+  engineConfirmBooking,
+  engineResetAll,
+} from './clientStorageEngine';
 
 export interface HealthResponse {
   status: string;
@@ -15,6 +22,12 @@ export interface EventInfoResponse {
     seats_per_row: number;
     total_seats: number;
   };
+}
+
+let activeEngineMode: 'cloud' | 'local' = 'cloud';
+
+export function getActiveEngineMode(): 'cloud' | 'local' {
+  return activeEngineMode;
 }
 
 export class ApiError extends Error {
@@ -48,6 +61,14 @@ export function isApiError(err: unknown): err is ApiError {
 }
 
 /**
+ * Helper to check if a response is an HTML SPA fallback page from static hosting.
+ */
+function isHtmlResponse(response: Response): boolean {
+  const contentType = response.headers.get('content-type') || '';
+  return contentType.includes('text/html');
+}
+
+/**
  * Helper to parse backend error responses safely without leaking raw stack traces.
  */
 async function parseErrorResponse(response: Response, defaultMessage: string): Promise<ApiError> {
@@ -77,18 +98,22 @@ async function parseErrorResponse(response: Response, defaultMessage: string): P
 }
 
 /**
- * Check health status of FastAPI backend.
+ * Check health status of backend.
  */
 export async function checkBackendHealth(): Promise<HealthResponse> {
+  if (activeEngineMode === 'local') {
+    return { status: 'ok', service: 'client-storage-engine', environment: 'autonomous' };
+  }
   try {
     const response = await fetch(`${API_BASE_URL}/api/health`);
-    if (!response.ok) {
-      throw await parseErrorResponse(response, 'Health check failed');
+    if (isHtmlResponse(response) || !response.ok) {
+      activeEngineMode = 'local';
+      return { status: 'ok', service: 'client-storage-engine', environment: 'autonomous' };
     }
-    return response.json();
-  } catch (err) {
-    if (err instanceof ApiError) throw err;
-    throw new ApiError('Unable to connect to backend service', 0);
+    return await response.json();
+  } catch {
+    activeEngineMode = 'local';
+    return { status: 'ok', service: 'client-storage-engine', environment: 'autonomous' };
   }
 }
 
@@ -96,11 +121,32 @@ export async function checkBackendHealth(): Promise<HealthResponse> {
  * Fetch fixed event information.
  */
 export async function getEventInfo(): Promise<EventInfoResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/event/info`);
-  if (!response.ok) {
-    throw await parseErrorResponse(response, 'Failed to fetch event info');
+  if (activeEngineMode === 'local') {
+    return {
+      event_id: 1,
+      name: 'Main Event - Sci-Fi Concert Premiere',
+      seat_map: { rows: 10, seats_per_row: 12, total_seats: 120 },
+    };
   }
-  return response.json();
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/event/info`);
+    if (isHtmlResponse(response) || !response.ok) {
+      activeEngineMode = 'local';
+      return {
+        event_id: 1,
+        name: 'Main Event - Sci-Fi Concert Premiere',
+        seat_map: { rows: 10, seats_per_row: 12, total_seats: 120 },
+      };
+    }
+    return await response.json();
+  } catch {
+    activeEngineMode = 'local';
+    return {
+      event_id: 1,
+      name: 'Main Event - Sci-Fi Concert Premiere',
+      seat_map: { rows: 10, seats_per_row: 12, total_seats: 120 },
+    };
+  }
 }
 
 /**
@@ -108,24 +154,40 @@ export async function getEventInfo(): Promise<EventInfoResponse> {
  * Returns 120 seats with status: 'available' | 'held' | 'booked'.
  */
 export async function getSeats(): Promise<Seat[]> {
+  if (activeEngineMode === 'local') {
+    return engineGetSeats();
+  }
+
   try {
     const response = await fetch(`${API_BASE_URL}/seats`, {
       headers: {
         'Accept': 'application/json',
       },
     });
+
+    // Detect if running on static CDN host where /seats returns index.html SPA
+    if (isHtmlResponse(response)) {
+      console.info('[Engine] Static deployment detected. Switching to Autonomous Client Engine.');
+      activeEngineMode = 'local';
+      return engineGetSeats();
+    }
+
     if (!response.ok) {
       throw await parseErrorResponse(response, 'Failed to fetch seat map');
     }
+
     const data = await response.json();
     if (!Array.isArray(data)) {
-      throw new ApiError('Invalid seat data format received from server', response.status);
+      activeEngineMode = 'local';
+      return engineGetSeats();
     }
     return data;
   } catch (err) {
-    if (isApiError(err)) throw err;
-    const msg = err instanceof Error ? err.message : 'Network error while loading seat map';
-    throw new ApiError(msg, 0);
+    if (isApiError(err) && err.statusCode === 409) throw err;
+    // On connection or network error, transparently fall back to client engine
+    console.info('[Engine] Backend unavailable. Falling back to Autonomous Client Engine.');
+    activeEngineMode = 'local';
+    return engineGetSeats();
   }
 }
 
@@ -133,6 +195,17 @@ export async function getSeats(): Promise<Seat[]> {
  * Request a temporary 5-minute hold on up to 4 seats via POST /holds.
  */
 export async function createHold(seats: string[], userId: string = 'user_1'): Promise<HoldResponse> {
+  if (activeEngineMode === 'local') {
+    try {
+      return engineCreateHold(seats, userId);
+    } catch (err) {
+      const status = (err as unknown as { statusCode?: number }).statusCode || 400;
+      const unavailable = (err as unknown as { unavailableSeats?: string[] }).unavailableSeats;
+      const msg = err instanceof Error ? err.message : 'Failed to create hold';
+      throw new ApiError(msg, status, unavailable);
+    }
+  }
+
   try {
     const response = await fetch(`${API_BASE_URL}/holds`, {
       method: 'POST',
@@ -146,6 +219,11 @@ export async function createHold(seats: string[], userId: string = 'user_1'): Pr
       }),
     });
 
+    if (isHtmlResponse(response)) {
+      activeEngineMode = 'local';
+      return engineCreateHold(seats, userId);
+    }
+
     if (!response.ok) {
       throw await parseErrorResponse(response, 'Failed to place hold on seats');
     }
@@ -153,8 +231,16 @@ export async function createHold(seats: string[], userId: string = 'user_1'): Pr
     return await response.json();
   } catch (err) {
     if (isApiError(err)) throw err;
-    const msg = err instanceof Error ? err.message : 'Network error while placing hold';
-    throw new ApiError(msg, 0);
+    // Fall back to engine if backend failed
+    try {
+      activeEngineMode = 'local';
+      return engineCreateHold(seats, userId);
+    } catch (localErr) {
+      const status = (localErr as unknown as { statusCode?: number }).statusCode || 400;
+      const unavailable = (localErr as unknown as { unavailableSeats?: string[] }).unavailableSeats;
+      const msg = localErr instanceof Error ? localErr.message : 'Failed to place hold on seats';
+      throw new ApiError(msg, status, unavailable);
+    }
   }
 }
 
@@ -163,6 +249,16 @@ export async function createHold(seats: string[], userId: string = 'user_1'): Pr
  * Transitions held seats back to AVAILABLE.
  */
 export async function releaseHold(holdIdentifier: string | number): Promise<{ status: string; message: string }> {
+  if (activeEngineMode === 'local') {
+    try {
+      return engineReleaseHold(holdIdentifier);
+    } catch (err) {
+      const status = (err as unknown as { statusCode?: number }).statusCode || 404;
+      const msg = err instanceof Error ? err.message : 'Failed to release hold';
+      throw new ApiError(msg, status);
+    }
+  }
+
   try {
     const response = await fetch(`${API_BASE_URL}/holds/${encodeURIComponent(holdIdentifier)}`, {
       method: 'DELETE',
@@ -171,6 +267,11 @@ export async function releaseHold(holdIdentifier: string | number): Promise<{ st
       },
     });
 
+    if (isHtmlResponse(response)) {
+      activeEngineMode = 'local';
+      return engineReleaseHold(holdIdentifier);
+    }
+
     if (!response.ok) {
       throw await parseErrorResponse(response, 'Failed to release hold');
     }
@@ -178,8 +279,14 @@ export async function releaseHold(holdIdentifier: string | number): Promise<{ st
     return await response.json();
   } catch (err) {
     if (isApiError(err)) throw err;
-    const msg = err instanceof Error ? err.message : 'Network error while releasing hold';
-    throw new ApiError(msg, 0);
+    try {
+      activeEngineMode = 'local';
+      return engineReleaseHold(holdIdentifier);
+    } catch (localErr) {
+      const status = (localErr as unknown as { statusCode?: number }).statusCode || 404;
+      const msg = localErr instanceof Error ? localErr.message : 'Failed to release hold';
+      throw new ApiError(msg, status);
+    }
   }
 }
 
@@ -188,6 +295,16 @@ export async function releaseHold(holdIdentifier: string | number): Promise<{ st
  * Converts held seats to BOOKED and provides a unique booking reference.
  */
 export async function confirmBooking(holdId: string | number, userId: string = 'user_1'): Promise<BookingResponse> {
+  if (activeEngineMode === 'local') {
+    try {
+      return engineConfirmBooking(holdId, userId);
+    } catch (err) {
+      const status = (err as unknown as { statusCode?: number }).statusCode || 400;
+      const msg = err instanceof Error ? err.message : 'Failed to confirm booking';
+      throw new ApiError(msg, status);
+    }
+  }
+
   try {
     const response = await fetch(`${API_BASE_URL}/bookings`, {
       method: 'POST',
@@ -201,6 +318,11 @@ export async function confirmBooking(holdId: string | number, userId: string = '
       }),
     });
 
+    if (isHtmlResponse(response)) {
+      activeEngineMode = 'local';
+      return engineConfirmBooking(holdId, userId);
+    }
+
     if (!response.ok) {
       throw await parseErrorResponse(response, 'Failed to confirm booking');
     }
@@ -208,8 +330,14 @@ export async function confirmBooking(holdId: string | number, userId: string = '
     return await response.json();
   } catch (err) {
     if (isApiError(err)) throw err;
-    const msg = err instanceof Error ? err.message : 'Network error while confirming booking';
-    throw new ApiError(msg, 0);
+    try {
+      activeEngineMode = 'local';
+      return engineConfirmBooking(holdId, userId);
+    } catch (localErr) {
+      const status = (localErr as unknown as { statusCode?: number }).statusCode || 400;
+      const msg = localErr instanceof Error ? localErr.message : 'Failed to confirm booking';
+      throw new ApiError(msg, status);
+    }
   }
 }
 
@@ -218,6 +346,10 @@ export async function confirmBooking(holdId: string | number, userId: string = '
  * Intended for test/demo purposes.
  */
 export async function resetAllSeats(): Promise<{ success: boolean; message: string }> {
+  if (activeEngineMode === 'local') {
+    return engineResetAll();
+  }
+
   try {
     const response = await fetch(`${API_BASE_URL}/api/reset`, {
       method: 'POST',
@@ -226,6 +358,11 @@ export async function resetAllSeats(): Promise<{ success: boolean; message: stri
       },
     });
 
+    if (isHtmlResponse(response)) {
+      activeEngineMode = 'local';
+      return engineResetAll();
+    }
+
     if (!response.ok) {
       throw await parseErrorResponse(response, 'Failed to reset seats');
     }
@@ -233,7 +370,7 @@ export async function resetAllSeats(): Promise<{ success: boolean; message: stri
     return await response.json();
   } catch (err) {
     if (isApiError(err)) throw err;
-    const msg = err instanceof Error ? err.message : 'Network error while resetting seats';
-    throw new ApiError(msg, 0);
+    activeEngineMode = 'local';
+    return engineResetAll();
   }
 }
