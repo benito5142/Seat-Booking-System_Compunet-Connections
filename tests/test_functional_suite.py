@@ -390,3 +390,29 @@ def test_22_get_bookings_returns_confirmed_bookings(client, reset_test_db):
     refs = [b["booking_reference"] for b in bookings]
     assert ref1 in refs
     assert ref2 in refs
+
+
+def test_23_reset_all_seats_resets_everything_to_available(client, reset_test_db):
+    """23. POST /api/reset resets all seats back to available and clears bookings."""
+    # Place a hold and confirm a booking
+    r_hold = client.post("/holds", json={"seats": ["A1", "A2"]})
+    assert r_hold.status_code == 201
+    r_book = client.post("/bookings", json={"hold_id": r_hold.json()["id"]})
+    assert r_book.status_code == 201
+
+    # Call reset endpoint
+    r_reset = client.post("/api/reset")
+    assert r_reset.status_code == 200
+    assert r_reset.json()["success"] is True
+
+    # Check seats are all available
+    r_seats = client.get("/seats")
+    assert r_seats.status_code == 200
+    seats = r_seats.json()
+    assert len(seats) == 120
+    assert all(s["status"].lower() == "available" for s in seats)
+
+    # Check bookings are cleared
+    r_get_bookings = client.get("/bookings")
+    assert r_get_bookings.status_code == 200
+    assert len(r_get_bookings.json()) == 0

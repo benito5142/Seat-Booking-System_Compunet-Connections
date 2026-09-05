@@ -32,11 +32,16 @@ def is_backend_healthy():
     except Exception:
         return False
 
+def kill_existing_backend():
+    try:
+        subprocess.run(["pkill", "-9", "-f", "uvicorn backend.app.main:app"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(0.5)
+    except Exception:
+        pass
+
 def start_backend():
+    kill_existing_backend()
     init_sqlite_if_needed()
-    if is_backend_healthy():
-        print("Backend already running on port 8001.")
-        return
 
     env = os.environ.copy()
     env["USE_SQLITE"] = "true"

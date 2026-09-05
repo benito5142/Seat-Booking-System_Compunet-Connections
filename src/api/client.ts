@@ -190,3 +190,27 @@ export async function confirmBooking(holdId: string | number, userId: string = '
     throw new ApiError('Network error while confirming booking', 0);
   }
 }
+
+/**
+ * Reset all seats to AVAILABLE and clear holds/bookings via POST /api/reset.
+ * Intended for test/demo purposes.
+ */
+export async function resetAllSeats(): Promise<{ success: boolean; message: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/reset`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw await parseErrorResponse(response, 'Failed to reset seats');
+    }
+
+    return response.json();
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    throw new ApiError('Network error while resetting seats', 0);
+  }
+}

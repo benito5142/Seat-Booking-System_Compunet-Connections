@@ -1,9 +1,11 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Seat, ActiveHold, BookingResponse } from './types';
 import { EVENT_SPEC } from './config';
-import { getSeats, createHold, releaseHold, confirmBooking, ApiError } from './api/client';
+import { getSeats, createHold, releaseHold, confirmBooking, resetAllSeats, ApiError } from './api/client';
 import { SeatMap } from './components/SeatMap';
 import { HoldCountdown } from './components/HoldCountdown';
+import movieBannerImg from './assets/images/movie_event_banner_1788586861818.jpg';
+import eventPosterImg from './assets/images/event_poster_thumb_1788586878308.jpg';
 import {
   AlertCircle,
   CheckCircle2,
@@ -12,6 +14,17 @@ import {
   Ticket,
   Info,
   RefreshCw,
+  Film,
+  MapPin,
+  Calendar,
+  Clock,
+  Sparkles,
+  ShieldCheck,
+  Search,
+  ChevronDown,
+  Copy,
+  Check,
+  RotateCcw,
 } from 'lucide-react';
 
 export default function App() {
@@ -28,6 +41,7 @@ export default function App() {
 
   // Confirmed booking state
   const [confirmedBooking, setConfirmedBooking] = useState<BookingResponse | null>(null);
+  const [copiedRef, setCopiedRef] = useState<boolean>(false);
 
   // Feedback and notification states
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -38,6 +52,8 @@ export default function App() {
   const [holdSubmitting, setHoldSubmitting] = useState<boolean>(false);
   const [releaseSubmitting, setReleaseSubmitting] = useState<boolean>(false);
   const [confirmSubmitting, setConfirmSubmitting] = useState<boolean>(false);
+  const [isResetting, setIsResetting] = useState<boolean>(false);
+  const [justRefreshed, setJustRefreshed] = useState<boolean>(false);
 
   // Polling in-flight guard to prevent duplicate overlapping network requests
   const isPollingRef = useRef<boolean>(false);
@@ -54,9 +70,11 @@ export default function App() {
 
     if (isManualRefresh) {
       setIsRefreshing(true);
+      setErrorMessage(null);
     }
 
     try {
+      const startTime = Date.now();
       const seatData = await getSeats();
       setSeats(seatData);
 
@@ -78,6 +96,15 @@ export default function App() {
           );
         }
       }
+
+      if (isManualRefresh) {
+        const elapsed = Date.now() - startTime;
+        if (elapsed < 400) {
+          await new Promise((resolve) => setTimeout(resolve, 400 - elapsed));
+        }
+        setJustRefreshed(true);
+        setTimeout(() => setJustRefreshed(false), 2000);
+      }
     } catch (err) {
       // In automatic polling, keep errors subtle; in manual refresh, display error
       if (isManualRefresh) {
@@ -96,13 +123,7 @@ export default function App() {
   }, [loadSeats]);
 
   /**
-   * Automatic Seat-Map Polling (~3-second interval):
-   * 
-   * Chosen specifications & rationale:
-   * - 3 seconds provides quick, responsive visibility of other users' actions (holds, bookings, releases).
-   * - Generates negligible network and database overhead for single-event booking.
-   * - Simple, robust, and clean without introducing complex WebSocket infrastructure.
-   * - Guarded by in-flight ref and cleaned up on unmount.
+   * Automatic Seat-Map Polling (~3-second interval)
    */
   useEffect(() => {
     const pollInterval = setInterval(() => {
@@ -273,6 +294,34 @@ export default function App() {
   };
 
   /**
+   * Reset All Seats Flow: POST /api/reset (Project Demo Testing Tool)
+   * Restores all 120 seats to AVAILABLE, clearing all holds and bookings.
+   * Note: Normal page reloads and refreshes continue to preserve persistent state.
+   */
+  const handleResetAllSeats = async () => {
+    setIsResetting(true);
+    setErrorMessage(null);
+    setMaxSeatsWarning(null);
+
+    try {
+      const result = await resetAllSeats();
+      setActiveHold(null);
+      setSelectedSeatIds([]);
+      setConfirmedBooking(null);
+      setInfoMessage(result.message || 'All seats have been reset to Available.');
+      await loadSeats(false);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setErrorMessage(err.message);
+      } else {
+        setErrorMessage('Failed to reset seats');
+      }
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
+  /**
    * Active hold expired countdown callback (when remaining reaches 0).
    */
   const handleHoldExpired = useCallback(() => {
@@ -282,60 +331,225 @@ export default function App() {
     loadSeats(false);
   }, [loadSeats]);
 
+  const handleCopyBookingRef = (reference: string) => {
+    navigator.clipboard.writeText(reference);
+    setCopiedRef(true);
+    setTimeout(() => setCopiedRef(false), 2000);
+  };
+
   // Derive counts for summary
   const availableCount = seats.filter((s) => s.status.toLowerCase() === 'available').length;
   const heldCount = seats.filter((s) => s.status.toLowerCase() === 'held').length;
   const bookedCount = seats.filter((s) => s.status.toLowerCase() === 'booked').length;
 
+  // Approximate pricing calculation for display realism
+  const calculateTotalEstimate = () => {
+    let total = 0;
+    selectedSeatIds.forEach((id) => {
+      const row = id[0];
+      if (['A', 'B', 'C'].includes(row)) total += 350;
+      else if (['D', 'E', 'F', 'G'].includes(row)) total += 250;
+      else total += 150;
+    });
+    return total;
+  };
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans">
-      {/* Top Application Bar */}
-      <header id="app-header" className="bg-white border-b border-slate-200 sticky top-0 z-20">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold text-base shadow-xs">
-              SB
+    <div className="min-h-screen bg-[#F5F5F7] text-slate-900 flex flex-col font-sans selection:bg-rose-500 selection:text-white">
+      {/* BookMyShow Style Signature Dark Header Bar */}
+      <header id="app-header" className="bg-[#1F2533] text-white sticky top-0 z-30 shadow-md">
+        {/* Main Brand & Navigation Row */}
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-6">
+            {/* BookMyShow Logo Emblem */}
+            <div className="flex items-center gap-2 cursor-pointer select-none">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[#E03A58] to-[#F84464] flex items-center justify-center shadow-lg shadow-rose-600/30">
+                <Ticket className="w-6 h-6 text-white transform -rotate-12" />
+              </div>
+              <div className="flex flex-col">
+                <div className="text-xl font-black tracking-tight leading-none">
+                  book<span className="text-[#F84464]">my</span>seat
+                </div>
+                <span className="text-[10px] text-slate-400 font-semibold tracking-widest uppercase mt-0.5">
+                  Cinema & Events
+                </span>
+              </div>
             </div>
-            <div>
-              <h1 className="text-base font-semibold text-slate-900 leading-tight">
-                Seat Booking System
-              </h1>
-              <p className="text-xs text-slate-500">
-                {EVENT_SPEC.name} • 10 Rows × 12 Seats (120 Total)
-              </p>
+
+            {/* Mock City & Search Input */}
+            <div className="hidden md:flex items-center bg-[#2B3144] rounded-lg px-3 py-2 w-72 text-xs text-slate-300 border border-slate-700/60 focus-within:border-[#F84464] transition-colors">
+              <Search className="w-4 h-4 text-slate-400 mr-2 shrink-0" />
+              <span className="text-slate-400 select-none truncate">
+                Search for Movies, Concerts, Plays...
+              </span>
             </div>
           </div>
 
-          {/* Quick Stats & Polling Status */}
-          <div className="flex items-center gap-4">
-            <div className="hidden sm:flex items-center gap-3 text-xs">
-              <span className="text-emerald-700 font-medium">
-                {availableCount} Available
-              </span>
-              <span className="text-slate-300">•</span>
-              <span className="text-amber-700 font-medium">
-                {heldCount} Held
-              </span>
-              <span className="text-slate-300">•</span>
-              <span className="text-slate-600 font-medium">
-                {bookedCount} Booked
-              </span>
+          {/* Right Header Navigation & Actions */}
+          <div className="flex items-center gap-3 sm:gap-4">
+            {/* Location Selector Pill */}
+            <div className="hidden lg:flex items-center gap-1.5 text-xs text-slate-300 hover:text-white cursor-pointer px-2 py-1 select-none">
+              <MapPin className="w-3.5 h-3.5 text-[#F84464]" />
+              <span className="font-semibold">Bengaluru</span>
+              <ChevronDown className="w-3 h-3 text-slate-400" />
             </div>
 
+            {/* Live Polling Status Pill */}
+            <div className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#111622] border border-emerald-500/30 text-emerald-400 text-xs shadow-2xs">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="font-medium text-[11px] tracking-wide">Live 3s Polling</span>
+            </div>
+
+            {/* Refresh Button */}
             <button
               id="refresh-seats-btn"
               type="button"
               onClick={() => loadSeats(true)}
               disabled={isRefreshing}
               title="Refresh seat map (automatic 3s polling active)"
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-colors disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-[#2B3144] hover:bg-[#39415A] border border-slate-700 transition-all disabled:opacity-50 cursor-pointer shadow-xs active:scale-95"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">Refresh</span>
+              {justRefreshed ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-emerald-400 font-medium">Refreshed</span>
+                </>
+              ) : (
+                <>
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-[#F84464]' : 'text-slate-300'}`} />
+                  <span className="text-xs">{isRefreshing ? 'Refreshing...' : 'Refresh'}</span>
+                </>
+              )}
+            </button>
+
+            {/* Project Demo Reset Button */}
+            <button
+              id="quick-reset-seats-btn"
+              type="button"
+              onClick={handleResetAllSeats}
+              disabled={isResetting}
+              title="Reset all 120 seats to Available"
+              className="inline-flex items-center gap-1.5 text-xs text-slate-300 hover:text-white transition-all px-3 py-1.5 rounded-lg bg-[#2B3144]/80 hover:bg-[#39415A] border border-slate-700 cursor-pointer disabled:opacity-50 shadow-xs active:scale-95"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${isResetting ? 'animate-spin text-[#F84464]' : 'text-slate-400'}`} />
+              <span className="text-xs font-medium">{isResetting ? 'Resetting...' : 'Reset Seats'}</span>
             </button>
           </div>
         </div>
+
+        {/* Theatrical Subheader Strip */}
+        <div className="bg-[#121622] border-t border-slate-800/80 px-4 sm:px-6 py-2.5">
+          <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 text-slate-300">
+              <span className="font-bold text-white text-sm tracking-wide">
+                {EVENT_SPEC.name}
+              </span>
+              <span className="text-slate-600">•</span>
+              <span className="text-rose-400 font-semibold bg-rose-950/60 px-2 py-0.5 rounded border border-rose-800/40 text-[11px]">
+                IMAX 2D
+              </span>
+              <span className="hidden sm:inline text-slate-600">•</span>
+              <span className="hidden sm:inline text-slate-400">PVR INOX: Grand Rex Audi 01</span>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <span className="text-slate-400 flex items-center gap-1">
+                <Calendar className="w-3.5 h-3.5 text-[#F84464]" /> Today, 07:30 PM
+              </span>
+              <span className="text-slate-600">•</span>
+              <span className="text-slate-400 flex items-center gap-1">
+                <Film className="w-3.5 h-3.5 text-blue-400" /> Dolby Atmos 7.1
+              </span>
+            </div>
+          </div>
+        </div>
       </header>
+
+      {/* Cinematic Hero Poster Banner */}
+      <section className="relative w-full bg-[#0E121D] text-white overflow-hidden shadow-inner border-b border-slate-800">
+        {/* Background Banner Image with Dark Vignette */}
+        <div className="absolute inset-0 z-0 opacity-40 mix-blend-screen">
+          <img
+            src={movieBannerImg}
+            alt="Event Stage Backdrop"
+            referrerPolicy="no-referrer"
+            className="w-full h-full object-cover object-center filter blur-[1px]"
+          />
+        </div>
+        <div className="absolute inset-0 bg-gradient-to-t from-[#0E121D] via-[#0E121D]/75 to-transparent z-0" />
+        <div className="absolute inset-0 bg-gradient-to-r from-[#0E121D] via-transparent to-[#0E121D] z-0" />
+
+        {/* Banner Content */}
+        <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8 flex flex-col md:flex-row items-center md:items-end justify-between gap-6">
+          {/* Poster & Movie Title Block */}
+          <div className="flex items-center gap-5 w-full md:w-auto">
+            <div className="relative shrink-0 w-24 sm:w-28 rounded-xl overflow-hidden shadow-2xl border-2 border-white/20 bg-slate-900 group">
+              <img
+                src={eventPosterImg}
+                alt="Event Poster"
+                referrerPolicy="no-referrer"
+                className="w-full h-34 sm:h-40 object-cover group-hover:scale-105 transition-transform duration-300"
+              />
+              <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-[#F84464] text-[9px] font-black tracking-wider uppercase shadow-xs">
+                LIVE
+              </span>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="px-2 py-0.5 rounded bg-white/10 text-white font-bold text-[10px] border border-white/20">
+                  UA 16+
+                </span>
+                <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-semibold text-[10px] border border-rose-500/30">
+                  Sci-Fi Concert Premiere
+                </span>
+                <span className="text-slate-400 text-xs flex items-center gap-1">
+                  <Clock className="w-3 h-3 text-slate-400" /> 2h 45m
+                </span>
+              </div>
+
+              <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight leading-tight">
+                {EVENT_SPEC.name}
+              </h2>
+
+              <p className="text-xs text-slate-300 flex items-center gap-2 mt-0.5">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <span>Auditorium Seating: 10 Rows × 12 Columns • 120 Maximum Capacity</span>
+              </p>
+            </div>
+          </div>
+
+          {/* Real-time Inventory Pills */}
+          <div className="flex items-center gap-3 shrink-0 bg-black/40 backdrop-blur-md p-3 rounded-xl border border-white/10">
+            <div className="text-center px-2">
+              <span className="block text-lg font-black text-emerald-400 leading-tight">
+                {availableCount}
+              </span>
+              <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-400">
+                Available
+              </span>
+            </div>
+            <div className="w-px h-8 bg-white/10" />
+            <div className="text-center px-2">
+              <span className="block text-lg font-black text-amber-400 leading-tight">
+                {heldCount}
+              </span>
+              <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-400">
+                Held
+              </span>
+            </div>
+            <div className="w-px h-8 bg-white/10" />
+            <div className="text-center px-2">
+              <span className="block text-lg font-black text-slate-400 leading-tight">
+                {bookedCount}
+              </span>
+              <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-400">
+                Booked
+              </span>
+            </div>
+          </div>
+        </div>
+      </section>
 
       {/* Main Content Area */}
       <main className="max-w-5xl mx-auto w-full px-4 sm:px-6 py-6 flex-1 flex flex-col gap-5">
@@ -344,20 +558,22 @@ export default function App() {
           <div
             id="error-alert-banner"
             role="alert"
-            className="flex items-start justify-between gap-3 p-4 bg-red-50 border border-red-200 rounded-lg text-red-800 text-sm"
+            className="flex items-start justify-between gap-3 p-4 bg-rose-50 border-2 border-rose-300 rounded-xl text-rose-900 text-sm shadow-xs animate-shake"
           >
-            <div className="flex items-start gap-2.5">
-              <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+            <div className="flex items-start gap-3">
+              <div className="p-1.5 bg-rose-100 rounded-lg text-rose-600 shrink-0 mt-0.5">
+                <AlertCircle className="w-5 h-5" />
+              </div>
               <div>
-                <p className="font-semibold">Action Failed</p>
-                <p className="mt-0.5">{errorMessage}</p>
+                <p className="font-bold text-rose-950">Seat Booking Conflict / Error</p>
+                <p className="mt-0.5 text-rose-800 leading-relaxed">{errorMessage}</p>
               </div>
             </div>
             <button
               id="dismiss-error-btn"
               type="button"
               onClick={() => setErrorMessage(null)}
-              className="text-red-500 hover:text-red-700 text-xs font-bold px-2 py-1"
+              className="text-rose-500 hover:text-rose-700 text-xs font-bold px-2 py-1 cursor-pointer"
             >
               ✕
             </button>
@@ -369,19 +585,21 @@ export default function App() {
           <div
             id="info-alert-banner"
             role="status"
-            className="flex items-start justify-between gap-3 p-4 bg-blue-50 border border-blue-200 rounded-lg text-blue-900 text-sm"
+            className="flex items-start justify-between gap-3 p-4 bg-blue-50 border-2 border-blue-200 rounded-xl text-blue-900 text-sm shadow-xs"
           >
-            <div className="flex items-start gap-2.5">
-              <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+            <div className="flex items-start gap-3">
+              <div className="p-1.5 bg-blue-100 rounded-lg text-blue-600 shrink-0 mt-0.5">
+                <Info className="w-5 h-5" />
+              </div>
               <div>
-                <p>{infoMessage}</p>
+                <p className="font-medium leading-relaxed">{infoMessage}</p>
               </div>
             </div>
             <button
               id="dismiss-info-btn"
               type="button"
               onClick={() => setInfoMessage(null)}
-              className="text-blue-500 hover:text-blue-700 text-xs font-bold px-2 py-1"
+              className="text-blue-500 hover:text-blue-700 text-xs font-bold px-2 py-1 cursor-pointer"
             >
               ✕
             </button>
@@ -393,87 +611,108 @@ export default function App() {
           <div
             id="max-seats-warning"
             role="alert"
-            className="flex items-center justify-between gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-sm"
+            className="flex items-center justify-between gap-3 px-4 py-3 bg-amber-50 border-2 border-amber-300 rounded-xl text-amber-900 text-sm shadow-xs"
           >
-            <div className="flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>{maxSeatsWarning}</span>
+            <div className="flex items-center gap-2.5">
+              <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+              <span className="font-medium">{maxSeatsWarning}</span>
             </div>
             <button
               id="dismiss-max-warning-btn"
               type="button"
               onClick={() => setMaxSeatsWarning(null)}
-              className="text-amber-700 hover:text-amber-900 text-xs font-bold"
+              className="text-amber-700 hover:text-amber-900 text-xs font-bold cursor-pointer"
             >
               ✕
             </button>
           </div>
         )}
 
-        {/* Confirmed Booking Success Card */}
+        {/* Confirmed Booking Success Card (BookMyShow E-Ticket Style) */}
         {confirmedBooking && (
           <div
             id="confirmed-booking-card"
-            className="p-5 bg-emerald-50 border border-emerald-300 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xs"
+            className="p-6 bg-gradient-to-br from-emerald-50 via-white to-emerald-50 border-2 border-emerald-400 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-6 shadow-md"
           >
-            <div className="flex items-start gap-3">
-              <div className="p-2 bg-emerald-100 rounded-lg text-emerald-700">
-                <Ticket className="w-6 h-6" />
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-emerald-600/30">
+                <Ticket className="w-7 h-7" />
               </div>
-              <div>
+              <div className="flex flex-col gap-1">
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-800">
-                    Booking Confirmed
+                  <span className="text-xs font-black uppercase tracking-wider text-emerald-800">
+                    Booking Confirmed • E-Ticket Issued
                   </span>
                 </div>
-                <p className="text-lg font-bold text-slate-900 mt-0.5">
-                  Reference:{' '}
-                  <span id="booking-reference-code" className="font-mono text-emerald-900">
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-sm font-semibold text-slate-600">Reference:</span>
+                  <span
+                    id="booking-reference-code"
+                    className="font-mono text-xl font-black text-emerald-950 bg-emerald-100/80 px-2.5 py-0.5 rounded border border-emerald-300"
+                  >
                     {confirmedBooking.booking_reference}
                   </span>
-                </p>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyBookingRef(confirmedBooking.booking_reference)}
+                    title="Copy Reference Code"
+                    className="p-1 rounded hover:bg-emerald-200 text-emerald-800 transition-colors"
+                  >
+                    {copiedRef ? <Check className="w-4 h-4 text-emerald-700" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                </div>
                 <p className="text-xs text-slate-600 mt-1">
-                  Seats: <strong className="text-slate-900">{confirmedBooking.seats.join(', ')}</strong> (
-                  {confirmedBooking.seats.length} seat{confirmedBooking.seats.length > 1 ? 's' : ''})
+                  Confirmed Seats:{' '}
+                  <span className="font-bold text-slate-900 text-sm">
+                    {confirmedBooking.seats.join(', ')}
+                  </span>{' '}
+                  ({confirmedBooking.seats.length} ticket{confirmedBooking.seats.length > 1 ? 's' : ''}) • Auditorium 01
                 </p>
               </div>
             </div>
-            <button
-              id="dismiss-booking-card-btn"
-              type="button"
-              onClick={() => setConfirmedBooking(null)}
-              className="px-3 py-1.5 text-xs font-medium text-emerald-800 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 rounded-md transition-colors"
-            >
-              Dismiss
-            </button>
+
+            <div className="flex items-center gap-3 w-full md:w-auto justify-end">
+              <button
+                id="dismiss-booking-card-btn"
+                type="button"
+                onClick={() => setConfirmedBooking(null)}
+                className="px-4 py-2 text-xs font-bold text-emerald-900 bg-white hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-colors cursor-pointer shadow-2xs"
+              >
+                Book More Seats
+              </button>
+            </div>
           </div>
         )}
 
-        {/* Active Hold Control Panel */}
+        {/* Active Hold Control Panel (BookMyShow Payment / Timer Stage) */}
         {activeHold && (
           <div
             id="active-hold-panel"
-            className="p-5 bg-white border-2 border-amber-300 rounded-xl shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
+            className="p-5 bg-gradient-to-r from-amber-50 via-white to-amber-50 border-2 border-amber-400 rounded-2xl shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
           >
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center gap-2">
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300 uppercase">
-                  <Lock className="w-3 h-3" /> Active Hold
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-black bg-amber-400 text-amber-950 uppercase tracking-wider shadow-2xs">
+                  <Lock className="w-3 h-3" /> Locked & Held
                 </span>
                 <span id="active-hold-id" className="text-xs font-mono text-slate-500">
-                  ID: #{activeHold.id}
+                  Hold #{activeHold.id}
                 </span>
               </div>
-              <p className="text-sm font-semibold text-slate-800">
+              <p className="text-sm font-bold text-slate-900">
                 Held Seats:{' '}
-                <span id="active-hold-seats-list" className="text-blue-700 font-bold">
+                <span id="active-hold-seats-list" className="text-emerald-700 font-extrabold text-base">
                   {activeHold.seats.join(', ')}
                 </span>
+                <span className="text-slate-500 font-normal ml-2">
+                  ({activeHold.seats.length} seat{activeHold.seats.length > 1 ? 's' : ''} reserved)
+                </span>
               </p>
-              <p className="text-xs text-slate-500">
-                Backend Expiry:{' '}
-                <span className="font-mono">
+              <p className="text-xs text-slate-500 flex items-center gap-1">
+                <Clock className="w-3 h-3 text-slate-400" />
+                Backend Lock Expiry:{' '}
+                <span className="font-mono font-semibold text-slate-700">
                   {new Date(activeHold.expiresAt).toLocaleTimeString()}
                 </span>
               </p>
@@ -491,9 +730,9 @@ export default function App() {
                 type="button"
                 onClick={handleReleaseHold}
                 disabled={releaseSubmitting || confirmSubmitting}
-                className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-md transition-colors disabled:opacity-50"
+                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors disabled:opacity-50 cursor-pointer shadow-2xs"
               >
-                <Unlock className="w-3.5 h-3.5" />
+                <Unlock className="w-3.5 h-3.5 text-slate-500" />
                 <span>{releaseSubmitting ? 'Releasing...' : 'Release Hold'}</span>
               </button>
 
@@ -502,48 +741,56 @@ export default function App() {
                 type="button"
                 onClick={handleConfirmBooking}
                 disabled={confirmSubmitting || releaseSubmitting}
-                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-md shadow-xs transition-colors disabled:opacity-50"
+                className="inline-flex items-center justify-center gap-1.5 px-5 py-2.5 text-xs font-extrabold text-white bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 rounded-lg shadow-md shadow-emerald-600/30 transition-all disabled:opacity-50 cursor-pointer uppercase tracking-wider"
               >
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>{confirmSubmitting ? 'Confirming...' : 'Confirm Booking'}</span>
+                <CheckCircle2 className="w-4 h-4" />
+                <span>{confirmSubmitting ? 'Confirming Ticket...' : 'Confirm & Book Ticket'}</span>
               </button>
             </div>
           </div>
         )}
 
-        {/* Selection and Hold Bar (when no active hold) */}
+        {/* Selection and Hold Bar (BookMyShow Bottom Action Bar) */}
         {!activeHold && (
           <div
             id="selection-bar"
-            className="p-4 bg-white border border-slate-200 rounded-xl shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3"
+            className="p-4 sm:p-5 bg-white border border-slate-200/80 rounded-2xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
           >
             <div>
-              <p className="text-sm font-semibold text-slate-900">
-                Selected Seats:{' '}
+              <p className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                Selected Seats:
                 {selectedSeatIds.length > 0 ? (
-                  <span id="selected-seats-display" className="text-blue-600 font-bold">
+                  <span id="selected-seats-display" className="text-emerald-700 font-extrabold text-base">
                     {selectedSeatIds.join(', ')} ({selectedSeatIds.length}/{EVENT_SPEC.maxSelectableSeats})
                   </span>
                 ) : (
                   <span id="no-seats-selected" className="text-slate-400 font-normal">
-                    None (Click on up to 4 available seats below)
+                    None (Tap on up to 4 available seats in the map)
                   </span>
                 )}
               </p>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Seats are held for 5 minutes once submitted.
+              <p className="text-xs text-slate-500 mt-1 flex items-center gap-2">
+                <span>Hold Duration: <strong>5 minutes</strong></span>
+                {selectedSeatIds.length > 0 && (
+                  <>
+                    <span>•</span>
+                    <span className="text-[#F84464] font-bold">
+                      Estimated Total: ₹{calculateTotalEstimate()}
+                    </span>
+                  </>
+                )}
               </p>
             </div>
 
-            <div className="flex items-center gap-2 w-full sm:w-auto">
+            <div className="flex items-center gap-2.5 w-full sm:w-auto">
               {selectedSeatIds.length > 0 && (
                 <button
                   id="clear-selection-btn"
                   type="button"
                   onClick={() => setSelectedSeatIds([])}
-                  className="px-3 py-2 text-xs font-medium text-slate-600 hover:text-slate-900 transition-colors"
+                  className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 transition-colors cursor-pointer"
                 >
-                  Clear
+                  Clear Selection
                 </button>
               )}
 
@@ -552,12 +799,12 @@ export default function App() {
                 type="button"
                 disabled={selectedSeatIds.length === 0 || holdSubmitting || loading}
                 onClick={handleCreateHold}
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed shadow-xs transition-colors"
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl text-xs font-black text-white bg-gradient-to-r from-[#F84464] to-[#E03A58] hover:from-[#E03A58] hover:to-[#D02846] disabled:from-slate-200 disabled:to-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed shadow-md shadow-rose-600/20 transition-all uppercase tracking-wider cursor-pointer"
               >
                 <Lock className="w-3.5 h-3.5" />
                 <span>
                   {holdSubmitting
-                    ? 'Placing Hold...'
+                    ? 'Locking Seats...'
                     : `Hold ${selectedSeatIds.length > 0 ? `(${selectedSeatIds.length})` : ''} Selected Seat${
                         selectedSeatIds.length !== 1 ? 's' : ''
                       }`}
@@ -567,12 +814,12 @@ export default function App() {
           </div>
         )}
 
-        {/* 120-Seat Venue Map */}
+        {/* 120-Seat Venue Map Section */}
         <section id="venue-seat-map-section" className="flex-1 flex flex-col items-center">
           {loading && seats.length === 0 ? (
             <div id="loading-seats-indicator" className="py-20 text-center text-slate-500">
-              <RefreshCw className="w-8 h-8 animate-spin mx-auto mb-2 text-slate-400" />
-              <p className="text-sm">Loading seat map from server...</p>
+              <RefreshCw className="w-8 h-8 animate-spin mx-auto mb-3 text-[#F84464]" />
+              <p className="text-sm font-semibold">Connecting to live auditorium seat inventory...</p>
             </div>
           ) : (
             <SeatMap
@@ -586,11 +833,73 @@ export default function App() {
         </section>
       </main>
 
-      {/* Simple assessment footer */}
-      <footer id="app-footer" className="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500">
-        <p>
-          Seat Booking System Assessment • Backend Concurrency Hardened (SELECT FOR UPDATE + Atomic State Transitions)
-        </p>
+      {/* Professional BookMyShow Style Footer */}
+      <footer id="app-footer" className="bg-[#1F2533] text-slate-400 border-t border-slate-800 mt-12">
+        {/* Top Guarantee Strip */}
+        <div className="border-b border-slate-800/80 py-6">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 grid grid-cols-1 md:grid-cols-3 gap-6 text-center md:text-left">
+            <div className="flex items-center justify-center md:justify-start gap-3">
+              <div className="w-10 h-10 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center text-[#F84464]">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-white font-bold text-xs uppercase tracking-wider">
+                  100% Guaranteed Booking
+                </p>
+                <p className="text-[11px] text-slate-400">Pessimistic row-locks prevent double-booking</p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-center md:justify-start gap-3">
+              <div className="w-10 h-10 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center text-amber-400">
+                <Clock className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-white font-bold text-xs uppercase tracking-wider">
+                  5-Minute Temporary Hold
+                </p>
+                <p className="text-[11px] text-slate-400">Automatic TTL cleanup guarantees seat turnover</p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-center md:justify-start gap-3">
+              <div className="w-10 h-10 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center text-emerald-400">
+                <Ticket className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-white font-bold text-xs uppercase tracking-wider">
+                  Instant Unique Reference
+                </p>
+                <p className="text-[11px] text-slate-400">Verifiable booking codes generated on confirmation</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Bottom Copyright & Assessment Details */}
+        <div className="py-6 text-center text-xs text-slate-500">
+          <p className="font-medium text-slate-400">
+            BookMySeat • Cinema & Event Ticketing Platform
+          </p>
+          <p className="mt-1 text-[11px] text-slate-500">
+            Hardened with FastAPI, MySQL 8.0 ACID Transactions, Row-Level Locking (<code className="font-mono text-slate-400">SELECT ... FOR UPDATE</code>), and Multi-Threaded Barrier Safety.
+          </p>
+          <div className="mt-2.5 flex items-center justify-center gap-3 text-[11px] text-slate-500">
+            <span>© 2026 Entertainment Ticketing Systems Ltd. All Rights Reserved.</span>
+            <span>•</span>
+            <button
+              id="footer-reset-seats-btn"
+              type="button"
+              onClick={handleResetAllSeats}
+              disabled={isResetting}
+              title="Reset all 120 seats to Available for evaluation/testing"
+              className="inline-flex items-center gap-1 text-slate-500 hover:text-rose-400 transition-colors cursor-pointer underline text-[11px] disabled:opacity-50"
+            >
+              <RotateCcw className={`w-3 h-3 ${isResetting ? 'animate-spin text-[#F84464]' : ''}`} />
+              <span>{isResetting ? 'Resetting All Seats...' : 'Reset All Seats (Demo Tool)'}</span>
+            </button>
+          </div>
+        </div>
       </footer>
     </div>
   );

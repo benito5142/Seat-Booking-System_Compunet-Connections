@@ -519,3 +519,22 @@ def release_hold_endpoint(
         )
 
 
+@app.post("/api/reset")
+@app.post("/reset")
+def reset_all_seats_endpoint(db = Depends(get_db)):
+    """
+    Resets all 120 seats back to AVAILABLE for testing/demo purposes.
+    Clears all active holds and confirmed bookings.
+    Normal browser refreshes preserve the persistent database state.
+    """
+    from backend.app.seats_service import reset_all_seats_orm
+    try:
+        result = reset_all_seats_orm(db)
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to reset seats: {str(e)}",
+        )
+
+

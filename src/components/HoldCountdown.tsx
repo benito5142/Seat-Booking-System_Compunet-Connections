@@ -45,15 +45,18 @@ export const HoldCountdown: React.FC<HoldCountdownProps> = ({ expiresAt, onExpir
   return (
     <div
       id="active-hold-countdown"
-      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+      className={`inline-flex items-center gap-2.5 px-4 py-2 rounded-lg text-sm font-semibold shadow-xs transition-all ${
         isUrgent
-          ? 'bg-red-50 text-red-700 border border-red-200 animate-pulse'
-          : 'bg-amber-50 text-amber-800 border border-amber-200'
+          ? 'bg-rose-50 text-rose-700 border-2 border-rose-300 animate-pulse ring-2 ring-rose-200'
+          : 'bg-amber-50 text-amber-900 border-2 border-amber-300 ring-2 ring-amber-100'
       }`}
     >
-      <Clock className="w-4 h-4" />
-      <span>Hold Expires In:</span>
-      <span id="countdown-timer-display" className="font-mono font-bold text-base">
+      <Clock className={`w-4 h-4 ${isUrgent ? 'text-rose-600 animate-spin' : 'text-amber-600'}`} />
+      <span className="text-xs uppercase tracking-wider">Hold Expires In:</span>
+      <span
+        id="countdown-timer-display"
+        className="font-mono font-extrabold text-base tracking-wider px-2 py-0.5 rounded bg-white/90 shadow-2xs border border-amber-200"
+      >
         {formattedTime}
       </span>
     </div>

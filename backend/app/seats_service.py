@@ -1516,4 +1516,57 @@ def get_bookings_orm(session) -> List[Dict[str, Any]]:
     return results
 
 
+def reset_all_seats_orm(session) -> Dict[str, Any]:
+    """
+    Resets all 120 seats to AVAILABLE, deletes all booking seats, bookings,
+    hold seats, and holds. Useful for demo/evaluation test resets.
+    """
+    from backend.app.models import Seat, SeatStatus, Hold, HoldSeat, Booking, BookingSeat
+    try:
+        session.query(BookingSeat).delete(synchronize_session=False)
+        session.query(Booking).delete(synchronize_session=False)
+        session.query(HoldSeat).delete(synchronize_session=False)
+        session.query(Hold).delete(synchronize_session=False)
+        session.query(Seat).update(
+            {Seat.status: SeatStatus.AVAILABLE, Seat.version: 0},
+            synchronize_session=False,
+        )
+        session.commit()
+        return {
+            "success": True,
+            "message": "All seats have been reset to AVAILABLE and all holds/bookings cleared.",
+            "total_seats": 120,
+            "available_seats": 120,
+        }
+    except Exception as e:
+        session.rollback()
+        raise e
+
+
+def reset_all_seats_dbapi(conn_or_cursor) -> Dict[str, Any]:
+    """
+    Resets all seats to AVAILABLE using raw DB-API/SQLite.
+    """
+    if hasattr(conn_or_cursor, "cursor"):
+        cursor = conn_or_cursor.cursor()
+        conn = conn_or_cursor
+    else:
+        cursor = conn_or_cursor
+        conn = None
+
+    cursor.execute("DELETE FROM booking_seats")
+    cursor.execute("DELETE FROM bookings")
+    cursor.execute("DELETE FROM hold_seats")
+    cursor.execute("DELETE FROM holds")
+    cursor.execute("UPDATE seats SET status = 'AVAILABLE', version = 0")
+    if conn:
+        conn.commit()
+    return {
+        "success": True,
+        "message": "All seats have been reset to AVAILABLE and all holds/bookings cleared.",
+        "total_seats": 120,
+        "available_seats": 120,
+    }
+
+
 
