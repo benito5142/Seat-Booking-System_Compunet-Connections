@@ -48,6 +48,7 @@ async def lifespan(app: FastAPI):
     # Ensure tables and initial seats exist
     try:
         from backend.app.database import engine, SessionLocal, Base
+        import backend.app.models
         from backend.app.seed import seed_seats
         if engine and Base and SessionLocal:
             Base.metadata.create_all(bind=engine)

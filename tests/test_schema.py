@@ -1,0 +1,54 @@
+"""
+Schema definitions and tests for database tables.
+"""
+SCHEMA_SQL = """CREATE TABLE seats (
+    id VARCHAR(10) PRIMARY KEY,
+    row_label VARCHAR(2) NOT NULL,
+    seat_number INTEGER NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'AVAILABLE',
+    version INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_seats_row_seat UNIQUE (row_label, seat_number)
+);
+
+CREATE TABLE holds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    hold_token VARCHAR(64) NOT NULL UNIQUE,
+    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE hold_seats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    hold_id INTEGER NOT NULL,
+    seat_id VARCHAR(10) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (hold_id) REFERENCES holds(id) ON DELETE CASCADE,
+    FOREIGN KEY (seat_id) REFERENCES seats(id) ON DELETE RESTRICT,
+    CONSTRAINT uq_hold_seats_hold_seat UNIQUE (hold_id, seat_id)
+);
+
+CREATE TABLE bookings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    booking_reference VARCHAR(32) NOT NULL UNIQUE,
+    hold_id INTEGER UNIQUE,
+    status VARCHAR(20) NOT NULL DEFAULT 'CONFIRMED',
+    confirmed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (hold_id) REFERENCES holds(id) ON DELETE SET NULL
+);
+
+CREATE TABLE booking_seats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    booking_id INTEGER NOT NULL,
+    seat_id VARCHAR(10) NOT NULL UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE CASCADE,
+    FOREIGN KEY (seat_id) REFERENCES seats(id) ON DELETE RESTRICT,
+    CONSTRAINT uq_booking_seats_booking_seat UNIQUE (booking_id, seat_id)
+);
+"""
