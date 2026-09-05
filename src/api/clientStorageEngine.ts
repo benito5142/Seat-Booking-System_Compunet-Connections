@@ -336,6 +336,27 @@ export function engineConfirmBooking(holdIdentifier: string | number, userId: st
   };
 }
 
+export function engineGetActiveHold(): {
+  id: number | string;
+  holdToken: string;
+  seats: string[];
+  expiresAt: string;
+  status: string;
+  userId?: string;
+} | null {
+  const { holds } = sweepExpiredHolds();
+  const active = holds.find((h) => h.status === 'held');
+  if (!active) return null;
+  return {
+    id: active.id,
+    holdToken: active.hold_token,
+    seats: [...active.seats],
+    expiresAt: active.expires_at,
+    status: active.status,
+    userId: active.user_id,
+  };
+}
+
 /**
  * Client-Side Engine: POST /api/reset
  */

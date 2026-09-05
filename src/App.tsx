@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Seat, ActiveHold, BookingResponse } from './types';
 import { EVENT_SPEC } from './config';
 import { getSeats, createHold, releaseHold, confirmBooking, resetAllSeats, ApiError, isApiError } from './api/client';
+import { engineGetSeats, engineGetActiveHold } from './api/clientStorageEngine';
 import { SeatMap } from './components/SeatMap';
 import { HoldCountdown } from './components/HoldCountdown';
 import movieBannerImg from './assets/images/movie_event_banner_1788586861818.jpg';
@@ -28,16 +29,16 @@ import {
 } from 'lucide-react';
 
 export default function App() {
-  // Authoritative seat list from GET /seats
-  const [seats, setSeats] = useState<Seat[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  // Authoritative seat list from GET /seats (defaults to 120 seats immediately)
+  const [seats, setSeats] = useState<Seat[]>(() => engineGetSeats());
+  const [loading, setLoading] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
   // User selections (up to 4 seats)
   const [selectedSeatIds, setSelectedSeatIds] = useState<string[]>([]);
 
-  // Active hold state (5-minute TTL)
-  const [activeHold, setActiveHold] = useState<ActiveHold | null>(null);
+  // Active hold state (5-minute TTL, preserved across page reloads)
+  const [activeHold, setActiveHold] = useState<ActiveHold | null>(() => engineGetActiveHold());
 
   // Confirmed booking state
   const [confirmedBooking, setConfirmedBooking] = useState<BookingResponse | null>(null);
