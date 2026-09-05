@@ -106,9 +106,13 @@ export default function App() {
         setTimeout(() => setJustRefreshed(false), 2000);
       }
     } catch (err) {
-      // In automatic polling, keep errors subtle; in manual refresh, display error
-      if (isManualRefresh) {
-        setErrorMessage(err instanceof Error ? err.message : 'Failed to refresh seat map');
+      // If no seats are loaded yet or it was a manual refresh, display informative notice
+      if (isManualRefresh || seats.length === 0) {
+        setErrorMessage(
+          err instanceof Error
+            ? `Connection notice: ${err.message}`
+            : 'Connecting to seat booking service...'
+        );
       }
     } finally {
       setLoading(false);
@@ -355,7 +359,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F5F5F7] text-slate-900 flex flex-col font-sans selection:bg-rose-500 selection:text-white">
+    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#F5F5F7] text-slate-900 flex flex-col font-sans selection:bg-rose-500 selection:text-white">
       {/* BookMyShow Style Signature Dark Header Bar */}
       <header id="app-header" className="bg-[#1F2533] text-white sticky top-0 z-30 shadow-md">
         {/* Main Brand & Navigation Row */}

@@ -428,3 +428,26 @@ And the user reported:
 | **Two-Tier Expiration** | README § Hold Expiration | "Combine lazy expiration on request with automated background worker" | `backend/app/seats_service.py`, `backend/app/main.py` | `test_expiration.py`, `test_holds_cleanup_endpoint` |
 | **3-Second Polling & Stale Pruning** | README § Polling | "Implement polling every 3 seconds... dynamically prune taken seats" | `src/App.tsx` | UI verification and in-flight request lock |
 | **Demo Seat Reset** | PROMPTS.md & README § Demo Tools | "Add reset all seats button anywhere in the UI but not that much visible for project purpose" | `backend/app/main.py` (`POST /api/reset`), `src/api/client.ts`, `src/App.tsx` | `test_23_reset_all_seats_resets_everything_to_available` |
+
+---
+
+### Iteration 6: Deployed Link & Mobile / Tablet Format Resolution
+
+#### The User Inquiry
+> *"i have sent my deployabled link tomy mobile phone via gmail a link when i click the appication opens and in ther the seat locking and all the ui feature is not working but all ui feature along with seat map works well on this ai studio if i moved to mobile or tablet view but not in real mobile and tablet also the format is changing on the real mobile and tablet why and could u fix it please do it"*
+
+#### The Root Cause Analysis
+1. **Missing Production Container Start Command**:
+   - In preview mode within AI Studio, the development script spawned the Python backend process and the Vite development server.
+   - When deployed or opened via the shared URL, Cloud Run boots the application container in production using `npm start`.
+   - Because `package.json` had no `start` script, the container fell back to serving static files from `dist/` without launching the Python FastAPI backend and without proxying API requests. Any call to `/seats` or `/holds` received 404 or index HTML fallback, causing the frontend seat array to remain empty and seat locking to fail.
+2. **Mobile Viewport Format Jitter**:
+   - On physical mobile devices (iOS Safari, Android Chrome), unconstrained horizontal elements and lack of `viewport-fit=cover` caused browser-level viewport zooming and horizontal page shifting.
+
+#### The Fixes Implemented
+1. **Full-Stack Express + Vite Production Architecture**:
+   - Created `server.ts` which automatically launches `python3 start_backend.py` on container startup, verifies backend health, reverse-proxies `/seats`, `/holds`, `/bookings`, and `/api/*` requests to the Python server on port 8001, and serves the Vite client application.
+   - Added production build script (`esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs`) and production start command (`node dist/server.cjs`).
+2. **Mobile Viewport & Styling Hardening**:
+   - Enhanced `index.html` with `viewport-fit=cover`, `maximum-scale=1.0`, and mobile status bar styles.
+   - Added `overflow-x: hidden` and `w-full max-w-full` constraints to `src/index.css` and the root layout container in `src/App.tsx`, preserving horizontal swipe exclusively inside the auditorium seat map.

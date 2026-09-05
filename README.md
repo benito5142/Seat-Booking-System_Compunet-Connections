@@ -629,5 +629,20 @@ Following the evaluation guidance (*"Ship what works and write down what's missi
    - *Current State*: Row locks are managed within a single relational database instance (MySQL / SQLite).
    - *What's Missing*: For horizontally scaled, multi-region database clusters, a distributed locking layer (such as Redis Redlock or ZooKeeper) would be needed before database writes.
 
+---
+
+## Production Container Deployment & Mobile Architecture
+
+### Root Cause of Deployed Link Mobile Behavior & Fix
+When opening the deployed/shared URL on a real mobile or tablet device:
+1. **Missing Production Start Script & Backend Orchestration**:
+   - In preview mode, the development script spawned the Python backend and Vite dev server. However, in the deployed production container (Cloud Run), the platform defaults to starting the app via `npm start`.
+   - Without an explicit `"start"` script in `package.json`, the platform served only static assets from `dist/`, dropping all backend API endpoints (`/seats`, `/holds`, `/bookings`, `/api/*`) with 404/SPA index fallback.
+   - **Resolution**: Implemented a unified Node/Express server (`server.ts` compiled via `esbuild` to `dist/server.cjs`), configured `"start": "node dist/server.cjs"`, which automatically orchestrates the Python FastAPI backend on container boot and reverse-proxies all API requests to `http://127.0.0.1:8001` with high-performance streaming.
+
+2. **Mobile Viewport & Touch Layout Integrity**:
+   - Enhanced `index.html` with `viewport-fit=cover`, `-webkit-tap-highlight-color: transparent`, and strict overflow bounding (`w-full max-w-full overflow-x-hidden`) to eliminate mobile viewport jitter, text-size scaling anomalies, and sideways layout shifting on iOS Safari and Android Chrome.
+   - Constrained horizontal scrolling specifically to the auditorium seat map (`touch-pan-x`) while keeping headers, inventory badges, and action bars firmly aligned.
+
 
 
