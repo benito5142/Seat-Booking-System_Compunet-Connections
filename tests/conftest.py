@@ -13,15 +13,31 @@ from backend.app.config import settings
 from backend.app.database import get_db
 from backend.app.seed import seed_seats_dbapi
 from tests.test_schema import SCHEMA_SQL
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
+import tempfile
+import os
+
+TEST_DB_FILE = os.path.join(tempfile.gettempdir(), "seat_booking_test.db")
+if os.path.exists(TEST_DB_FILE):
+    try:
+        os.remove(TEST_DB_FILE)
+    except Exception:
+        pass
 
 test_engine = create_engine(
-    "sqlite:///:memory:",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
+    f"sqlite:///{TEST_DB_FILE}",
+    connect_args={"check_same_thread": False, "timeout": 30.0},
 )
+
+@event.listens_for(test_engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode = WAL;")
+    cursor.execute("PRAGMA foreign_keys = ON;")
+    cursor.execute("PRAGMA busy_timeout = 30000;")
+    cursor.close()
+
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
 with test_engine.connect() as connection:

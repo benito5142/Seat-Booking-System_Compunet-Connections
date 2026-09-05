@@ -45,6 +45,17 @@ async def periodic_cleanup_loop(interval_seconds: int = 15):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Ensure tables and initial seats exist
+    try:
+        from backend.app.database import engine, SessionLocal, Base
+        from backend.app.seed import seed_seats
+        if engine and Base and SessionLocal:
+            Base.metadata.create_all(bind=engine)
+            with SessionLocal() as session:
+                seed_seats(session)
+    except Exception:
+        pass
+
     # Start background cleanup task
     cleanup_task = asyncio.create_task(periodic_cleanup_loop(interval_seconds=15))
     yield

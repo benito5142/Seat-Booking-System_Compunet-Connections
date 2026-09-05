@@ -45,7 +45,9 @@ class Settings:
 
     @property
     def DATABASE_URL(self) -> str:
-        """Constructs the MySQL database connection URL using PyMySQL driver."""
+        """Constructs the database connection URL."""
+        if os.getenv("USE_SQLITE") == "true":
+            return os.getenv("SQLITE_URL", "sqlite:////tmp/seat_booking.db")
         password_part = f":{self.DB_PASSWORD}" if self.DB_PASSWORD else ""
         return f"mysql+pymysql://{self.DB_USER}{password_part}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
 

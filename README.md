@@ -127,3 +127,31 @@ To prevent race conditions where two concurrent requests see the same seat as av
 - **Scenario 1 (Request A -> A1, Request B -> A1)**: Request A acquires exclusive row lock on `A1`. Request B blocks waiting for the row lock. Request A verifies `A1` is available, marks it `HELD`, and commits. Request B unblocks, reads `A1` as `HELD`, immediately rolls back, and returns `HTTP 409 Conflict`. Exactly one request succeeds.
 - **Scenario 2 (Request A -> A1, A2; Request B -> A2, A3)**: Request A locks `A1` and `A2`. Request B waits on `A2`. Request A marks `A1` and `A2` as `HELD` and commits. Request B unblocks, discovers `A2` is `HELD`. Because of all-or-nothing atomicity, Request B rolls back without holding `A3`. `A3` remains untouched and `AVAILABLE`. Request B returns `HTTP 409 Conflict`.
 
+---
+
+## Frontend Seat-Booking Experience
+
+### Fixed 120-Seat Map
+- **Dimensions**: Exactly 10 rows (A–J) × 12 seats (1–12) = 120 total seats.
+- **Visual States**:
+  - `Available` (green): selectable
+  - `Selected` (blue): user selection (max 4 seats)
+  - `Held` (amber): temporarily locked with 5-minute TTL
+  - `Booked` (gray): permanently reserved
+- **Selection Limit**: Up to 4 seats maximum. Attempting to select a 5th seat displays an informative limit warning.
+
+### Automatic Polling Strategy (3-Second Interval)
+A **3-second polling interval** was chosen because:
+1. **Responsive Enough**: Keeps the seat map fresh without noticeable lag for users observing real-time hold and booking changes.
+2. **Quick Visibility**: Ensures conflicting holds or newly released seats become visible within a narrow time window.
+3. **Low Request Volume**: Produces minimal database and server overhead for single-event booking.
+4. **Simple & Robust**: Avoids introducing unnecessary WebSockets or event streaming infrastructure while maintaining high reliability.
+- **Stale Seat Reconciliation**: When polling runs, if any locally selected seat is marked held or booked by another user on the backend, the frontend removes that stale seat from selection and informs the user.
+
+### Active Hold Countdown & Lifecycle
+- **Authoritative Timestamp**: The 5-minute countdown is derived dynamically from `expires_at - current_time` returned by the backend (never a local un-synchronized timer).
+- **Expiration Callback**: When the timer reaches 0, the active hold is cleared and the seat map refreshed.
+- **Release Hold**: Users can explicitly release their active hold via `DELETE /holds/{id}`.
+- **Confirm Booking**: Users can confirm their hold into a completed reservation via `POST /bookings`, receiving a unique booking reference.
+
+

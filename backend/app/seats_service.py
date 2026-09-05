@@ -394,10 +394,30 @@ def create_hold_dbapi(
             )
 
         # Step 5: All requested seats are available -> create hold atomically
+        now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+        # Under MySQL, SQLite, and all SQL engines, this UPDATE statement with
+        # WHERE status = 'AVAILABLE' is atomic and acquires exclusive locks.
+        # It guarantees that exactly len(sorted_seat_ids) rows are transitioned.
+        placeholders = ",".join(["?"] * len(sorted_seat_ids))
+        cursor.execute(
+            f"""
+            UPDATE seats 
+            SET status = 'HELD', version = version + 1, updated_at = ? 
+            WHERE id IN ({placeholders}) AND status = 'AVAILABLE'
+            """,
+            [now_str] + sorted_seat_ids,
+        )
+        if cursor.rowcount != len(sorted_seat_ids):
+            if conn:
+                conn.rollback()
+            raise SeatUnavailableError(
+                f"One or more requested seats could not be held because they were concurrently acquired: {', '.join(sorted_seat_ids)}",
+                unavailable_seats=sorted_seat_ids,
+            )
+
         hold_token = uuid.uuid4().hex
         expires_at = now_dt + timedelta(minutes=5)
         expires_at_str = expires_at.strftime("%Y-%m-%d %H:%M:%S")
-        now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
 
         cursor.execute(
             """
@@ -412,10 +432,6 @@ def create_hold_dbapi(
             cursor.execute(
                 "INSERT INTO hold_seats (hold_id, seat_id, created_at) VALUES (?, ?, ?)",
                 (hold_id, sid, now_str),
-            )
-            cursor.execute(
-                "UPDATE seats SET status = 'HELD', version = version + 1, updated_at = ? WHERE id = ?",
-                (now_str, sid),
             )
 
         if conn:
@@ -439,6 +455,12 @@ def create_hold_dbapi(
     except Exception as e:
         if conn:
             conn.rollback()
+        err_msg = str(e).lower()
+        if "deadlock" in err_msg or "locked" in err_msg or "conflict" in err_msg:
+            raise SeatUnavailableError(
+                "Transaction conflict or deadlock encountered while holding seats. Please retry.",
+                unavailable_seats=sorted_seat_ids,
+            )
         raise e
 
 def create_hold_orm(
@@ -535,6 +557,33 @@ def create_hold_orm(
             )
 
         # Step 5: All requested seats are available -> create hold atomically
+        # Atomic transition of seat statuses from AVAILABLE to HELD:
+        # In addition to row locking (SELECT ... FOR UPDATE), this atomic UPDATE
+        # with 'WHERE status = AVAILABLE' provides an ironclad database-level barrier
+        # against check-then-act race conditions across all database engines and isolation levels.
+        # Exactly len(sorted_seat_ids) rows MUST be updated.
+        updated_count = (
+            session.query(Seat)
+            .filter(
+                Seat.id.in_(sorted_seat_ids),
+                Seat.status == SeatStatus.AVAILABLE,
+            )
+            .update(
+                {
+                    Seat.status: SeatStatus.HELD,
+                    Seat.version: Seat.version + 1,
+                    Seat.updated_at: now_dt,
+                },
+                synchronize_session=False,
+            )
+        )
+        if updated_count != len(sorted_seat_ids):
+            session.rollback()
+            raise SeatUnavailableError(
+                f"One or more requested seats could not be held because they were concurrently acquired: {', '.join(sorted_seat_ids)}",
+                unavailable_seats=sorted_seat_ids,
+            )
+
         hold_token = uuid.uuid4().hex
         expires_at = now_dt + timedelta(minutes=5)
 
@@ -547,10 +596,7 @@ def create_hold_orm(
         session.flush()
 
         for sid in sorted_seat_ids:
-            seat = found_seat_map[sid]
-            session.add(HoldSeat(hold_id=hold.id, seat_id=seat.id))
-            seat.status = SeatStatus.HELD
-            seat.version += 1
+            session.add(HoldSeat(hold_id=hold.id, seat_id=sid))
 
         session.commit()
 
@@ -570,6 +616,12 @@ def create_hold_orm(
         raise
     except Exception as e:
         session.rollback()
+        err_msg = str(e).lower()
+        if "deadlock" in err_msg or "locked" in err_msg or "conflict" in err_msg:
+            raise SeatUnavailableError(
+                "Transaction conflict or deadlock encountered while holding seats. Please retry.",
+                unavailable_seats=sorted_seat_ids,
+            )
         raise e
 
 def cleanup_expired_holds_dbapi(
@@ -883,6 +935,16 @@ def confirm_hold_dbapi(
         if not booking_reference:
             booking_reference = f"BK-{uuid.uuid4().hex[:12].upper()}"
 
+        # Atomic transition: mark hold as CONFIRMED only if still ACTIVE
+        cursor.execute(
+            "UPDATE holds SET status = 'CONFIRMED', updated_at = ? WHERE id = ? AND status = 'ACTIVE'",
+            (now_str, h_id),
+        )
+        if cursor.rowcount != 1:
+            if conn:
+                conn.rollback()
+            raise HoldAlreadyConfirmedError("Hold has already been confirmed into a booking", status_code=400)
+
         cursor.execute(
             """
             INSERT INTO bookings (booking_reference, hold_id, status, confirmed_at, created_at, updated_at) 
@@ -902,12 +964,6 @@ def confirm_hold_dbapi(
                 (now_str, sid),
             )
 
-        # Mark hold as CONFIRMED
-        cursor.execute(
-            "UPDATE holds SET status = 'CONFIRMED', updated_at = ? WHERE id = ?",
-            (now_str, h_id),
-        )
-
         if conn:
             conn.commit()
 
@@ -925,17 +981,11 @@ def confirm_hold_dbapi(
             "user_id": user_id,
         }
 
-    except sqlite3.IntegrityError:
+    except (sqlite3.IntegrityError, Exception) as e:
         if conn:
             conn.rollback()
-        raise HoldError("Hold has already been confirmed or duplicate booking detected", status_code=400)
-    except HoldError:
-        if conn:
-            conn.rollback()
-        raise
-    except Exception as e:
-        if conn:
-            conn.rollback()
+        if isinstance(e, sqlite3.IntegrityError) or "unique constraint" in str(e).lower() or "duplicate" in str(e).lower():
+            raise HoldAlreadyConfirmedError("Hold has already been confirmed or duplicate booking detected", status_code=400)
         raise e
 
 def confirm_hold_orm(
@@ -1053,6 +1103,19 @@ def confirm_hold_orm(
         if not booking_reference:
             booking_reference = f"BK-{uuid.uuid4().hex[:12].upper()}"
 
+        # Atomic transition: mark hold as CONFIRMED only if still ACTIVE
+        updated_hold = (
+            session.query(Hold)
+            .filter(Hold.id == hold.id, Hold.status == HoldStatus.ACTIVE)
+            .update(
+                {Hold.status: HoldStatus.CONFIRMED, Hold.updated_at: now_dt},
+                synchronize_session=False,
+            )
+        )
+        if updated_hold != 1:
+            session.rollback()
+            raise HoldAlreadyConfirmedError("Hold has already been confirmed into a booking", status_code=400)
+
         booking = Booking(
             booking_reference=booking_reference,
             hold_id=hold.id,
@@ -1067,7 +1130,6 @@ def confirm_hold_orm(
             s.status = SeatStatus.BOOKED
             s.version += 1
 
-        hold.status = HoldStatus.CONFIRMED
         session.commit()
 
         return {
@@ -1086,7 +1148,7 @@ def confirm_hold_orm(
 
     except IntegrityError:
         session.rollback()
-        raise HoldError("Hold has already been confirmed or duplicate booking detected", status_code=400)
+        raise HoldAlreadyConfirmedError("Hold has already been confirmed or duplicate booking detected", status_code=400)
     except HoldError:
         session.rollback()
         raise
