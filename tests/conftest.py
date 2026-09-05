@@ -50,3 +50,17 @@ def client():
 def app_settings():
     """Provides access to configured application settings in tests."""
     return settings
+
+@pytest.fixture
+def reset_test_db():
+    """Resets database state between functional test runs."""
+    with test_engine.connect() as connection:
+        raw_conn = connection.connection.dbapi_connection
+        cursor = raw_conn.cursor()
+        cursor.execute("DELETE FROM booking_seats")
+        cursor.execute("DELETE FROM bookings")
+        cursor.execute("DELETE FROM hold_seats")
+        cursor.execute("DELETE FROM holds")
+        cursor.execute("UPDATE seats SET status = 'AVAILABLE', version = 0")
+        raw_conn.commit()
+    yield

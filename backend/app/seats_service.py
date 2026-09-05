@@ -259,13 +259,15 @@ def create_hold_dbapi(
     if not cleaned_ids:
         raise InvalidSeatRequestError("At least one seat must be specified", status_code=400)
 
-    # Handle duplicate seat IDs cleanly
-    unique_seat_ids = list(dict.fromkeys(cleaned_ids))
-    if len(unique_seat_ids) > 4 or len(cleaned_ids) > 4:
+    # Reject duplicate seat IDs within the same request
+    if len(set(cleaned_ids)) != len(cleaned_ids):
+        raise InvalidSeatRequestError("Duplicate seat IDs within the same request are not allowed", status_code=400)
+
+    if len(cleaned_ids) > 4:
         raise InvalidSeatRequestError("Maximum of 4 seats can be held at once", status_code=400)
 
     # Consistent locking order to prevent AB-BA deadlocks between concurrent requests
-    sorted_seat_ids = sorted(unique_seat_ids)
+    sorted_seat_ids = sorted(cleaned_ids)
 
     # Determine connection and cursor
     if hasattr(conn_or_cursor, "cursor"):
@@ -469,13 +471,15 @@ def create_hold_orm(
     if not cleaned_ids:
         raise InvalidSeatRequestError("At least one seat must be specified", status_code=400)
 
-    # Handle duplicate seat IDs cleanly
-    unique_seat_ids = list(dict.fromkeys(cleaned_ids))
-    if len(unique_seat_ids) > 4 or len(cleaned_ids) > 4:
+    # Reject duplicate seat IDs within the same request
+    if len(set(cleaned_ids)) != len(cleaned_ids):
+        raise InvalidSeatRequestError("Duplicate seat IDs within the same request are not allowed", status_code=400)
+
+    if len(cleaned_ids) > 4:
         raise InvalidSeatRequestError("Maximum of 4 seats can be held at once", status_code=400)
 
     # Consistent locking order
-    sorted_seat_ids = sorted(unique_seat_ids)
+    sorted_seat_ids = sorted(cleaned_ids)
 
     try:
         # Step 2: Lock seat rows in consistent order using SELECT ... FOR UPDATE
@@ -852,7 +856,7 @@ def confirm_hold_dbapi(
         # Check if booking already exists for this hold
         cursor.execute("SELECT id FROM bookings WHERE hold_id = ?", (h_id,))
         if cursor.fetchone():
-            raise HoldError("Hold has already been confirmed into a booking", status_code=400)
+            raise HoldAlreadyConfirmedError("Hold has already been confirmed into a booking", status_code=400)
 
         # Check if any seat is already booked in booking_seats
         placeholders = ",".join(["?"] * len(seat_ids))

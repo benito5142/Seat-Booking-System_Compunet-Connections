@@ -12,13 +12,13 @@ from pydantic import BaseModel, Field
 from backend.app.config import settings
 from backend.app.database import get_db
 from backend.app.seats_service import (
+    HoldAlreadyConfirmedError,
+    HoldAlreadyReleasedError,
+    HoldExpiredError,
+    HoldNotFoundError,
     HoldError,
     InvalidSeatRequestError,
     SeatUnavailableError,
-    HoldNotFoundError,
-    HoldExpiredError,
-    HoldAlreadyReleasedError,
-    HoldAlreadyConfirmedError,
 )
 
 async def periodic_cleanup_loop(interval_seconds: int = 15):
@@ -99,53 +99,56 @@ async def validation_exception_handler(request, exc: RequestValidationError):
     )
 
 @app.exception_handler(InvalidSeatRequestError)
-async def invalid_seat_request_handler(request, exc: InvalidSeatRequestError):
+async def invalid_seat_exception_handler(request, exc: InvalidSeatRequestError):
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.message},
     )
 
 @app.exception_handler(SeatUnavailableError)
-async def seat_unavailable_handler(request, exc: SeatUnavailableError):
+async def seat_unavailable_exception_handler(request, exc: SeatUnavailableError):
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
         content={
-            "detail": exc.message,
+            "detail": {
+                "message": exc.message,
+                "unavailable_seats": exc.unavailable_seats,
+            },
             "message": exc.message,
             "unavailable_seats": exc.unavailable_seats,
         },
     )
 
 @app.exception_handler(HoldNotFoundError)
-async def hold_not_found_handler(request, exc: HoldNotFoundError):
+async def hold_not_found_exception_handler(request, exc: HoldNotFoundError):
     return JSONResponse(
         status_code=status.HTTP_404_NOT_FOUND,
         content={"detail": exc.message},
     )
 
-@app.exception_handler(HoldExpiredError)
-async def hold_expired_handler(request, exc: HoldExpiredError):
-    return JSONResponse(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        content={"detail": exc.message},
-    )
-
 @app.exception_handler(HoldAlreadyReleasedError)
-async def hold_already_released_handler(request, exc: HoldAlreadyReleasedError):
+async def hold_already_released_exception_handler(request, exc: HoldAlreadyReleasedError):
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content={"detail": exc.message},
     )
 
 @app.exception_handler(HoldAlreadyConfirmedError)
-async def hold_already_confirmed_handler(request, exc: HoldAlreadyConfirmedError):
+async def hold_already_confirmed_exception_handler(request, exc: HoldAlreadyConfirmedError):
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": exc.message},
+    )
+
+@app.exception_handler(HoldExpiredError)
+async def hold_expired_exception_handler(request, exc: HoldExpiredError):
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content={"detail": exc.message},
     )
 
 @app.exception_handler(HoldError)
-async def hold_error_handler(request, exc: HoldError):
+async def hold_error_exception_handler(request, exc: HoldError):
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.message},
@@ -298,12 +301,7 @@ def confirm_hold_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=e.message,
         )
-    except HoldAlreadyReleasedError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=e.message,
-        )
-    except HoldExpiredError as e:
+    except (HoldAlreadyReleasedError, HoldAlreadyConfirmedError, HoldExpiredError) as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=e.message,
@@ -398,12 +396,7 @@ def create_booking_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=e.message,
         )
-    except HoldAlreadyReleasedError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=e.message,
-        )
-    except HoldExpiredError as e:
+    except (HoldAlreadyReleasedError, HoldAlreadyConfirmedError, HoldExpiredError) as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=e.message,
@@ -475,12 +468,6 @@ def release_hold_endpoint(
     - Releasing an already expired/released/confirmed hold returns an appropriate response.
     - Does not accidentally release seats belonging to another hold.
     """
-    if not id or not str(id).strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Hold identifier is required",
-        )
-
     from backend.app.seats_service import (
         release_hold_orm,
         HoldNotFoundError,
@@ -488,6 +475,12 @@ def release_hold_endpoint(
         HoldExpiredError,
         HoldError,
     )
+
+    if not id or not str(id).strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Hold identifier is required",
+        )
 
     try:
         result = release_hold_orm(session=db, hold_identifier=id)
@@ -497,12 +490,7 @@ def release_hold_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=e.message,
         )
-    except HoldAlreadyReleasedError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=e.message,
-        )
-    except HoldExpiredError as e:
+    except (HoldAlreadyReleasedError, HoldAlreadyConfirmedError, HoldExpiredError) as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=e.message,

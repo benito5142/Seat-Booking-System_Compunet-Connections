@@ -89,19 +89,17 @@ def test_holds_cleanup_endpoint(client):
     assert response.status_code == 200
     assert "cleaned_holds" in response.json()
 
-def test_post_holds_duplicate_seats_handled(client):
-    """Test that duplicate seat IDs in one hold request are handled and deduplicated."""
+def test_post_holds_duplicate_seats_rejected(client):
+    """Test that duplicate seat IDs in one hold request are rejected with 400 Bad Request."""
     response = client.post("/holds", json={"seats": ["B1", "B1", "b1"]})
-    assert response.status_code == 201
-    data = response.json()
-    assert data["seats"] == ["B1"]
-    assert data["status"] == "held"
+    assert response.status_code == 400
+    assert "duplicate" in response.json()["detail"].lower()
 
 def test_post_holds_nonexistent_seats_rejected(client):
     """Test that nonexistent seat IDs are rejected with 400 Bad Request."""
     response = client.post("/holds", json={"seats": ["Z99"]})
     assert response.status_code == 400
-    assert "Invalid seat ID" in response.json()["detail"]
+    assert "invalid" in response.json()["detail"].lower()
 
 def test_post_holds_empty_or_null_seat_id_rejected(client):
     """Test that empty or null seat IDs within the list are rejected with 400 Bad Request."""
@@ -116,7 +114,7 @@ def test_post_holds_malformed_payload_rejected(client):
     # seats as a string instead of a list
     response = client.post("/holds", json={"seats": "B3"})
     assert response.status_code == 400
-    assert "Validation error" in response.json()["detail"]
+    assert "validation error" in response.json()["detail"].lower()
 
     # missing seats field
     response = client.post("/holds", json={})
@@ -163,7 +161,7 @@ def test_post_bookings_success_and_get_bookings(client):
     # Confirm that trying to confirm the same hold again is rejected with 400 Bad Request
     dup_resp = client.post("/bookings", json={"hold_id": hold_id})
     assert dup_resp.status_code == 400
-    assert "already been confirmed" in dup_resp.json()["detail"]
+    assert "already been confirmed" in dup_resp.json()["detail"].lower()
 
     # Verify GET /bookings includes the new booking
     get_resp = client.get("/bookings")
@@ -187,15 +185,14 @@ def test_delete_holds_success_and_error_handling(client):
     # Attempting to release again must return 400 Bad Request
     re_rel_resp = client.delete(f"/holds/{hold_id}")
     assert re_rel_resp.status_code == 400
-    assert "already been released" in re_rel_resp.json()["detail"]
+    assert "already been released" in re_rel_resp.json()["detail"].lower()
 
     # Attempting to confirm a released hold must return 400 Bad Request
     conf_resp = client.post("/bookings", json={"hold_id": hold_id})
     assert conf_resp.status_code == 400
-    assert "released" in conf_resp.json()["detail"]
+    assert "released" in conf_resp.json()["detail"].lower()
 
     # Non-existent hold on DELETE returns 404
     missing_resp = client.delete("/holds/999999")
     assert missing_resp.status_code == 404
-
 
