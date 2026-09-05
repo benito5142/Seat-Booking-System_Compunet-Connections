@@ -3,12 +3,23 @@ FastAPI application definition and router endpoints.
 """
 import asyncio
 from contextlib import asynccontextmanager
-from typing import List, Optional
+from typing import List, Optional, Union, Any, Dict
 from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from backend.app.config import settings
 from backend.app.database import get_db
+from backend.app.seats_service import (
+    HoldError,
+    InvalidSeatRequestError,
+    SeatUnavailableError,
+    HoldNotFoundError,
+    HoldExpiredError,
+    HoldAlreadyReleasedError,
+    HoldAlreadyConfirmedError,
+)
 
 async def periodic_cleanup_loop(interval_seconds: int = 15):
     """
@@ -73,6 +84,72 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError):
+    """Formats request validation errors into a clean, useful HTTP 400 Bad Request."""
+    errors = []
+    for err in exc.errors():
+        loc = " -> ".join(str(l) for l in err.get("loc", []))
+        msg = err.get("msg", "Invalid value")
+        errors.append(f"{loc}: {msg}" if loc else msg)
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": f"Validation error: {'; '.join(errors)}"},
+    )
+
+@app.exception_handler(InvalidSeatRequestError)
+async def invalid_seat_request_handler(request, exc: InvalidSeatRequestError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.message},
+    )
+
+@app.exception_handler(SeatUnavailableError)
+async def seat_unavailable_handler(request, exc: SeatUnavailableError):
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={
+            "detail": exc.message,
+            "message": exc.message,
+            "unavailable_seats": exc.unavailable_seats,
+        },
+    )
+
+@app.exception_handler(HoldNotFoundError)
+async def hold_not_found_handler(request, exc: HoldNotFoundError):
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content={"detail": exc.message},
+    )
+
+@app.exception_handler(HoldExpiredError)
+async def hold_expired_handler(request, exc: HoldExpiredError):
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": exc.message},
+    )
+
+@app.exception_handler(HoldAlreadyReleasedError)
+async def hold_already_released_handler(request, exc: HoldAlreadyReleasedError):
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": exc.message},
+    )
+
+@app.exception_handler(HoldAlreadyConfirmedError)
+async def hold_already_confirmed_handler(request, exc: HoldAlreadyConfirmedError):
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": exc.message},
+    )
+
+@app.exception_handler(HoldError)
+async def hold_error_handler(request, exc: HoldError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.message},
+    )
 
 @app.get("/")
 def read_root():
@@ -398,6 +475,12 @@ def release_hold_endpoint(
     - Releasing an already expired/released/confirmed hold returns an appropriate response.
     - Does not accidentally release seats belonging to another hold.
     """
+    if not id or not str(id).strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Hold identifier is required",
+        )
+
     from backend.app.seats_service import (
         release_hold_orm,
         HoldNotFoundError,

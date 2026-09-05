@@ -36,6 +36,11 @@ class HoldAlreadyReleasedError(HoldError):
     def __init__(self, message: str = "Hold has already been released and cannot be confirmed", status_code: int = 400):
         super().__init__(message, status_code=status_code)
 
+class HoldAlreadyConfirmedError(HoldError):
+    """Raised when an operation is attempted on an already confirmed hold."""
+    def __init__(self, message: str = "Hold has already been confirmed into a booking", status_code: int = 400):
+        super().__init__(message, status_code=status_code)
+
 def get_seats_from_dbapi(cursor, now_dt: Optional[datetime] = None) -> List[Dict[str, Any]]:
     """
     Fetches all 120 seats from the database and determines their effective status.
@@ -239,15 +244,24 @@ def create_hold_dbapi(
         now_dt = datetime.utcnow()
 
     # Step 1: Input validation
-    if not seat_ids:
+    if not seat_ids or not isinstance(seat_ids, list):
         raise InvalidSeatRequestError("At least one seat must be specified", status_code=400)
 
-    cleaned_ids = [str(s).strip().upper() for s in seat_ids if str(s).strip()]
+    cleaned_ids = []
+    for s in seat_ids:
+        if s is None:
+            raise InvalidSeatRequestError("Seat ID cannot be null", status_code=400)
+        s_str = str(s).strip().upper()
+        if not s_str:
+            raise InvalidSeatRequestError("Empty seat ID is not allowed", status_code=400)
+        cleaned_ids.append(s_str)
+
     if not cleaned_ids:
         raise InvalidSeatRequestError("At least one seat must be specified", status_code=400)
 
+    # Handle duplicate seat IDs cleanly
     unique_seat_ids = list(dict.fromkeys(cleaned_ids))
-    if len(unique_seat_ids) > 4:
+    if len(unique_seat_ids) > 4 or len(cleaned_ids) > 4:
         raise InvalidSeatRequestError("Maximum of 4 seats can be held at once", status_code=400)
 
     # Consistent locking order to prevent AB-BA deadlocks between concurrent requests
@@ -440,15 +454,24 @@ def create_hold_orm(
         now_dt = datetime.utcnow()
 
     # Step 1: Input validation
-    if not seat_ids:
+    if not seat_ids or not isinstance(seat_ids, list):
         raise InvalidSeatRequestError("At least one seat must be specified", status_code=400)
 
-    cleaned_ids = [str(s).strip().upper() for s in seat_ids if str(s).strip()]
+    cleaned_ids = []
+    for s in seat_ids:
+        if s is None:
+            raise InvalidSeatRequestError("Seat ID cannot be null", status_code=400)
+        s_str = str(s).strip().upper()
+        if not s_str:
+            raise InvalidSeatRequestError("Empty seat ID is not allowed", status_code=400)
+        cleaned_ids.append(s_str)
+
     if not cleaned_ids:
         raise InvalidSeatRequestError("At least one seat must be specified", status_code=400)
 
+    # Handle duplicate seat IDs cleanly
     unique_seat_ids = list(dict.fromkeys(cleaned_ids))
-    if len(unique_seat_ids) > 4:
+    if len(unique_seat_ids) > 4 or len(cleaned_ids) > 4:
         raise InvalidSeatRequestError("Maximum of 4 seats can be held at once", status_code=400)
 
     # Consistent locking order
@@ -792,7 +815,7 @@ def confirm_hold_dbapi(
             raise HoldExpiredError("Hold has expired and cannot be confirmed", status_code=400)
 
         if str(h_status).upper() == "CONFIRMED":
-            raise HoldError("Hold has already been confirmed into a booking", status_code=400)
+            raise HoldAlreadyConfirmedError("Hold has already been confirmed into a booking", status_code=400)
 
         if str(h_status).upper() == "RELEASED":
             raise HoldAlreadyReleasedError("Hold has been released and cannot be confirmed", status_code=400)
@@ -973,7 +996,7 @@ def confirm_hold_orm(
             raise HoldExpiredError("Hold has expired and cannot be confirmed", status_code=400)
 
         if hold.status == HoldStatus.CONFIRMED:
-            raise HoldError("Hold has already been confirmed into a booking", status_code=400)
+            raise HoldAlreadyConfirmedError("Hold has already been confirmed into a booking", status_code=400)
 
         if hold.status == HoldStatus.RELEASED:
             raise HoldAlreadyReleasedError("Hold has been released and cannot be confirmed", status_code=400)
@@ -984,7 +1007,7 @@ def confirm_hold_orm(
         # Check if booking already exists for this hold
         existing_booking = session.query(Booking).filter(Booking.hold_id == hold.id).first()
         if existing_booking:
-            raise HoldError("Hold has already been confirmed into a booking", status_code=400)
+            raise HoldAlreadyConfirmedError("Hold has already been confirmed into a booking", status_code=400)
 
         # Verify and lock seats
         hold_seats = hold.hold_seats
@@ -1156,7 +1179,7 @@ def release_hold_dbapi(
             raise HoldAlreadyReleasedError(f"Hold {clean_id} has already been released", status_code=400)
 
         if status_upper == "CONFIRMED":
-            raise HoldError(f"Hold {clean_id} has already been confirmed and cannot be released", status_code=400)
+            raise HoldAlreadyConfirmedError(f"Hold {clean_id} has already been confirmed and cannot be released", status_code=400)
 
         if status_upper == "EXPIRED" or (exp_dt and exp_dt <= now_dt):
             cursor.execute("UPDATE holds SET status = 'EXPIRED', updated_at = ? WHERE id = ?", (now_str, hold_id))
@@ -1275,7 +1298,7 @@ def release_hold_orm(
             raise HoldAlreadyReleasedError(f"Hold {clean_id} has already been released", status_code=400)
 
         if hold.status == HoldStatus.CONFIRMED:
-            raise HoldError(f"Hold {clean_id} has already been confirmed and cannot be released", status_code=400)
+            raise HoldAlreadyConfirmedError(f"Hold {clean_id} has already been confirmed and cannot be released", status_code=400)
 
         # Check expiration
         is_expired = False
