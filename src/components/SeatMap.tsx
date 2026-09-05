@@ -26,14 +26,14 @@ export const SeatMap: React.FC<SeatMapProps> = ({
   }, [seats]);
 
   return (
-    <div id="seat-map-container" className="flex flex-col items-center w-full max-w-4xl mx-auto my-3">
+    <div id="seat-map-container" className="flex flex-col items-center w-full max-w-4xl mx-auto my-2 sm:my-3">
       {/* Curved Cinema Screen with Theatrical Light Glow */}
-      <div id="stage-banner" className="w-full max-w-2xl mb-8 flex flex-col items-center relative">
-        <div className="w-full h-4 bg-gradient-to-r from-rose-500/20 via-rose-500 to-rose-500/20 rounded-t-full shadow-[0_4px_20px_rgba(244,63,94,0.4)]" />
-        <div className="w-3/4 h-8 bg-gradient-to-b from-rose-500/15 to-transparent blur-md -mt-1 pointer-events-none" />
+      <div id="stage-banner" className="w-full max-w-2xl mb-6 sm:mb-8 flex flex-col items-center relative px-2">
+        <div className="w-full h-3.5 sm:h-4 bg-gradient-to-r from-rose-500/20 via-rose-500 to-rose-500/20 rounded-t-full shadow-[0_4px_20px_rgba(244,63,94,0.4)]" />
+        <div className="w-3/4 h-6 sm:h-8 bg-gradient-to-b from-rose-500/15 to-transparent blur-md -mt-1 pointer-events-none" />
         <div className="flex items-center gap-2 mt-1">
-          <Film className="w-3.5 h-3.5 text-rose-500" />
-          <span className="text-[11px] uppercase tracking-[0.25em] text-slate-500 font-bold">
+          <Film className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+          <span className="text-[10px] sm:text-[11px] uppercase tracking-[0.2em] sm:tracking-[0.25em] text-slate-500 font-bold">
             All Eyes This Way Please • Screen
           </span>
         </div>
@@ -42,129 +42,136 @@ export const SeatMap: React.FC<SeatMapProps> = ({
       {/* Seat Map Legend */}
       <div
         id="seat-map-legend"
-        className="flex flex-wrap items-center justify-center gap-6 mb-6 px-6 py-3 bg-white border border-slate-200 rounded-xl shadow-xs text-xs text-slate-700"
+        className="flex flex-wrap items-center justify-center gap-3 sm:gap-6 mb-4 sm:mb-6 px-3.5 sm:px-6 py-2.5 sm:py-3 bg-white border border-slate-200 rounded-xl shadow-xs text-xs text-slate-700 w-full sm:w-auto"
       >
         <div className="flex items-center gap-2">
           <span className="w-5 h-5 rounded-t-md rounded-b-xs border-2 border-slate-300 bg-white flex items-center justify-center shadow-2xs" />
-          <span className="font-medium text-slate-600">Available</span>
+          <span className="font-medium text-slate-600 text-xs">Available</span>
         </div>
         <div className="flex items-center gap-2">
           <span className="w-5 h-5 rounded-t-md rounded-b-xs border-2 border-emerald-600 bg-emerald-600 text-white flex items-center justify-center font-bold text-[10px] shadow-xs">
             ✓
           </span>
-          <span className="font-semibold text-emerald-800">Selected</span>
+          <span className="font-semibold text-emerald-800 text-xs">Selected</span>
         </div>
         <div className="flex items-center gap-2">
           <span className="w-5 h-5 rounded-t-md rounded-b-xs border-2 border-amber-400 bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-[10px]">
             <Lock className="w-2.5 h-2.5" />
           </span>
-          <span className="font-medium text-amber-800">Held (5m TTL)</span>
+          <span className="font-medium text-amber-800 text-xs">Held (5m TTL)</span>
         </div>
         <div className="flex items-center gap-2">
           <span className="w-5 h-5 rounded-t-md rounded-b-xs border border-slate-300 bg-slate-200 text-slate-400 flex items-center justify-center font-bold text-[10px]">
             ✕
           </span>
-          <span className="font-medium text-slate-400">Booked</span>
+          <span className="font-medium text-slate-400 text-xs">Booked</span>
         </div>
+      </div>
+
+      {/* Mobile Swipe Hint */}
+      <div className="md:hidden flex items-center justify-center gap-1.5 mb-2 text-[11px] text-slate-400 font-medium select-none">
+        <span>↔ Swipe horizontally to view all 12 columns</span>
       </div>
 
       {/* Grid: 10 Rows (A-J) x 12 Seats (1-12) */}
       <div
         id="seats-grid"
-        className="flex flex-col gap-3 p-6 bg-white border border-slate-200/90 rounded-2xl shadow-xs overflow-x-auto w-full max-w-3xl"
+        className="flex flex-col gap-2.5 sm:gap-3 p-3 sm:p-6 bg-white border border-slate-200/90 rounded-2xl shadow-xs overflow-x-auto w-full max-w-3xl touch-pan-x"
       >
-        {/* Column Number Headers */}
-        <div className="flex items-center justify-center gap-2 mb-1 text-[11px] font-semibold text-slate-400">
-          <span className="w-7 text-center" />
-          <div className="flex items-center gap-1.5 sm:gap-2">
-            {Array.from({ length: 6 }, (_, i) => i + 1).map((col) => (
-              <span key={col} className="w-8 sm:w-9 text-center">
-                {col}
-              </span>
-            ))}
+        <div className="min-w-[490px] sm:min-w-0 flex flex-col gap-2.5 sm:gap-3 mx-auto">
+          {/* Column Number Headers */}
+          <div className="flex items-center justify-center gap-2 mb-1 text-[11px] font-semibold text-slate-400">
+            <span className="w-7 text-center" />
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              {Array.from({ length: 6 }, (_, i) => i + 1).map((col) => (
+                <span key={col} className="w-8 sm:w-9 text-center">
+                  {col}
+                </span>
+              ))}
+            </div>
+            {/* Aisle Spacer */}
+            <span className="w-6 text-center text-[10px] text-slate-300 font-mono">||</span>
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              {Array.from({ length: 6 }, (_, i) => i + 7).map((col) => (
+                <span key={col} className="w-8 sm:w-9 text-center">
+                  {col}
+                </span>
+              ))}
+            </div>
+            <span className="w-7 text-center" />
           </div>
-          {/* Aisle Spacer */}
-          <span className="w-6 text-center text-[10px] text-slate-300 font-mono">||</span>
-          <div className="flex items-center gap-1.5 sm:gap-2">
-            {Array.from({ length: 6 }, (_, i) => i + 7).map((col) => (
-              <span key={col} className="w-8 sm:w-9 text-center">
-                {col}
-              </span>
-            ))}
-          </div>
-          <span className="w-7 text-center" />
+
+          {/* 10 Rows with Tier Category Header Indicators */}
+          {EVENT_SPEC.rows.map((rowLabel, index) => {
+            let categoryHeader = null;
+            if (rowLabel === 'A') {
+              categoryHeader = (
+                <div className="w-full flex items-center gap-3 pt-1 pb-1">
+                  <span className="text-[11px] font-bold text-rose-700 uppercase tracking-wider bg-rose-50 px-2.5 py-0.5 rounded-full border border-rose-200">
+                    VIP Recliner • ₹350
+                  </span>
+                  <div className="flex-1 h-px bg-rose-100" />
+                </div>
+              );
+            } else if (rowLabel === 'D') {
+              categoryHeader = (
+                <div className="w-full flex items-center gap-3 pt-3 pb-1">
+                  <span className="text-[11px] font-bold text-blue-700 uppercase tracking-wider bg-blue-50 px-2.5 py-0.5 rounded-full border border-blue-200">
+                    Prime Executive • ₹250
+                  </span>
+                  <div className="flex-1 h-px bg-blue-100" />
+                </div>
+              );
+            } else if (rowLabel === 'H') {
+              categoryHeader = (
+                <div className="w-full flex items-center gap-3 pt-3 pb-1">
+                  <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200">
+                    Classic Standard • ₹150
+                  </span>
+                  <div className="flex-1 h-px bg-slate-200" />
+                </div>
+              );
+            }
+
+            return (
+              <React.Fragment key={rowLabel}>
+                {categoryHeader}
+                <div className="flex items-center justify-center gap-2">
+                  {/* Left Row Indicator */}
+                  <span className="w-7 text-center font-bold text-slate-600 text-xs sm:text-sm">
+                    {rowLabel}
+                  </span>
+
+                  {/* Seats 1-6 */}
+                  <div className="flex items-center gap-1.5 sm:gap-2">
+                    {Array.from({ length: 6 }, (_, idx) => idx + 1).map((seatNum) => {
+                      const seatId = `${rowLabel}${seatNum}`;
+                      return renderSeatButton(seatId);
+                    })}
+                  </div>
+
+                  {/* Central Aisle Gap */}
+                  <div className="w-6 flex items-center justify-center">
+                    <span className="h-6 w-px bg-slate-200" />
+                  </div>
+
+                  {/* Seats 7-12 */}
+                  <div className="flex items-center gap-1.5 sm:gap-2">
+                    {Array.from({ length: 6 }, (_, idx) => idx + 7).map((seatNum) => {
+                      const seatId = `${rowLabel}${seatNum}`;
+                      return renderSeatButton(seatId);
+                    })}
+                  </div>
+
+                  {/* Right Row Indicator */}
+                  <span className="w-7 text-center font-bold text-slate-600 text-xs sm:text-sm">
+                    {rowLabel}
+                  </span>
+                </div>
+              </React.Fragment>
+            );
+          })}
         </div>
-
-        {/* 10 Rows with Tier Category Header Indicators */}
-        {EVENT_SPEC.rows.map((rowLabel, index) => {
-          let categoryHeader = null;
-          if (rowLabel === 'A') {
-            categoryHeader = (
-              <div className="w-full flex items-center gap-3 pt-1 pb-1">
-                <span className="text-[11px] font-bold text-rose-700 uppercase tracking-wider bg-rose-50 px-2.5 py-0.5 rounded-full border border-rose-200">
-                  VIP Recliner • ₹350
-                </span>
-                <div className="flex-1 h-px bg-rose-100" />
-              </div>
-            );
-          } else if (rowLabel === 'D') {
-            categoryHeader = (
-              <div className="w-full flex items-center gap-3 pt-3 pb-1">
-                <span className="text-[11px] font-bold text-blue-700 uppercase tracking-wider bg-blue-50 px-2.5 py-0.5 rounded-full border border-blue-200">
-                  Prime Executive • ₹250
-                </span>
-                <div className="flex-1 h-px bg-blue-100" />
-              </div>
-            );
-          } else if (rowLabel === 'H') {
-            categoryHeader = (
-              <div className="w-full flex items-center gap-3 pt-3 pb-1">
-                <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200">
-                  Classic Standard • ₹150
-                </span>
-                <div className="flex-1 h-px bg-slate-200" />
-              </div>
-            );
-          }
-
-          return (
-            <React.Fragment key={rowLabel}>
-              {categoryHeader}
-              <div className="flex items-center justify-center gap-2">
-                {/* Left Row Indicator */}
-                <span className="w-7 text-center font-bold text-slate-600 text-xs sm:text-sm">
-                  {rowLabel}
-                </span>
-
-                {/* Seats 1-6 */}
-                <div className="flex items-center gap-1.5 sm:gap-2">
-                  {Array.from({ length: 6 }, (_, idx) => idx + 1).map((seatNum) => {
-                    const seatId = `${rowLabel}${seatNum}`;
-                    return renderSeatButton(seatId);
-                  })}
-                </div>
-
-                {/* Central Aisle Gap */}
-                <div className="w-6 flex items-center justify-center">
-                  <span className="h-6 w-px bg-slate-200" />
-                </div>
-
-                {/* Seats 7-12 */}
-                <div className="flex items-center gap-1.5 sm:gap-2">
-                  {Array.from({ length: 6 }, (_, idx) => idx + 7).map((seatNum) => {
-                    const seatId = `${rowLabel}${seatNum}`;
-                    return renderSeatButton(seatId);
-                  })}
-                </div>
-
-                {/* Right Row Indicator */}
-                <span className="w-7 text-center font-bold text-slate-600 text-xs sm:text-sm">
-                  {rowLabel}
-                </span>
-              </div>
-            </React.Fragment>
-          );
-        })}
       </div>
     </div>
   );

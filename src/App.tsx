@@ -359,45 +359,45 @@ export default function App() {
       {/* BookMyShow Style Signature Dark Header Bar */}
       <header id="app-header" className="bg-[#1F2533] text-white sticky top-0 z-30 shadow-md">
         {/* Main Brand & Navigation Row */}
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-6">
+        <div className="max-w-6xl mx-auto px-3 sm:px-6 h-16 flex items-center justify-between gap-2 sm:gap-4">
+          <div className="flex items-center gap-3 sm:gap-6 min-w-0">
             {/* BookMyShow Logo Emblem */}
-            <div className="flex items-center gap-2 cursor-pointer select-none">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[#E03A58] to-[#F84464] flex items-center justify-center shadow-lg shadow-rose-600/30">
-                <Ticket className="w-6 h-6 text-white transform -rotate-12" />
+            <div className="flex items-center gap-2 cursor-pointer select-none shrink-0">
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-[#E03A58] to-[#F84464] flex items-center justify-center shadow-lg shadow-rose-600/30 shrink-0">
+                <Ticket className="w-5 h-5 sm:w-6 sm:h-6 text-white transform -rotate-12" />
               </div>
               <div className="flex flex-col">
-                <div className="text-xl font-black tracking-tight leading-none">
+                <div className="text-lg sm:text-xl font-black tracking-tight leading-none whitespace-nowrap">
                   book<span className="text-[#F84464]">my</span>seat
                 </div>
-                <span className="text-[10px] text-slate-400 font-semibold tracking-widest uppercase mt-0.5">
+                <span className="text-[9px] sm:text-[10px] text-slate-400 font-semibold tracking-widest uppercase mt-0.5 whitespace-nowrap">
                   Cinema & Events
                 </span>
               </div>
             </div>
 
-            {/* Mock City & Search Input */}
-            <div className="hidden md:flex items-center bg-[#2B3144] rounded-lg px-3 py-2 w-72 text-xs text-slate-300 border border-slate-700/60 focus-within:border-[#F84464] transition-colors">
+            {/* Mock City & Search Input - Shown only on large desktop screens to prevent tablet header overflow */}
+            <div className="hidden lg:flex items-center bg-[#2B3144] rounded-lg px-3 py-2 w-48 xl:w-72 text-xs text-slate-300 border border-slate-700/60 focus-within:border-[#F84464] transition-colors">
               <Search className="w-4 h-4 text-slate-400 mr-2 shrink-0" />
               <span className="text-slate-400 select-none truncate">
-                Search for Movies, Concerts, Plays...
+                Search Movies, Plays...
               </span>
             </div>
           </div>
 
-          {/* Right Header Navigation & Actions */}
-          <div className="flex items-center gap-3 sm:gap-4">
-            {/* Location Selector Pill */}
-            <div className="hidden lg:flex items-center gap-1.5 text-xs text-slate-300 hover:text-white cursor-pointer px-2 py-1 select-none">
+          {/* Right Header Navigation & Actions - Fully responsive & compact on mobile/tablet */}
+          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+            {/* Location Selector Pill - Desktop only */}
+            <div className="hidden xl:flex items-center gap-1.5 text-xs text-slate-300 hover:text-white cursor-pointer px-2 py-1 select-none shrink-0">
               <MapPin className="w-3.5 h-3.5 text-[#F84464]" />
               <span className="font-semibold">Bengaluru</span>
               <ChevronDown className="w-3 h-3 text-slate-400" />
             </div>
 
-            {/* Live Polling Status Pill */}
-            <div className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#111622] border border-emerald-500/30 text-emerald-400 text-xs shadow-2xs">
+            {/* Live Polling Status Pill - Responsive (hidden on mobile/tablet to give action buttons priority) */}
+            <div className="hidden md:inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full bg-[#111622] border border-emerald-500/30 text-emerald-400 text-xs shadow-2xs shrink-0">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="font-medium text-[11px] tracking-wide">Live 3s Polling</span>
+              <span className="font-medium text-[11px] tracking-wide whitespace-nowrap">Live 3s Polling</span>
             </div>
 
             {/* Refresh Button */}
@@ -407,17 +407,17 @@ export default function App() {
               onClick={() => loadSeats(true)}
               disabled={isRefreshing}
               title="Refresh seat map (automatic 3s polling active)"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-[#2B3144] hover:bg-[#39415A] border border-slate-700 transition-all disabled:opacity-50 cursor-pointer shadow-xs active:scale-95"
+              className="inline-flex items-center justify-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-[#2B3144] hover:bg-[#39415A] border border-slate-700 transition-all disabled:opacity-50 cursor-pointer shadow-xs active:scale-95 shrink-0 whitespace-nowrap"
             >
               {justRefreshed ? (
                 <>
-                  <Check className="w-3.5 h-3.5 text-emerald-400" />
-                  <span className="text-emerald-400 font-medium">Refreshed</span>
+                  <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span className="text-emerald-400 font-medium text-[11px] sm:text-xs">Refreshed</span>
                 </>
               ) : (
                 <>
-                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-[#F84464]' : 'text-slate-300'}`} />
-                  <span className="text-xs">{isRefreshing ? 'Refreshing...' : 'Refresh'}</span>
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-[#F84464]' : 'text-slate-300'} shrink-0`} />
+                  <span className="text-[11px] sm:text-xs">{isRefreshing ? 'Refreshing...' : 'Refresh'}</span>
                 </>
               )}
             </button>
@@ -429,36 +429,36 @@ export default function App() {
               onClick={handleResetAllSeats}
               disabled={isResetting}
               title="Reset all 120 seats to Available"
-              className="inline-flex items-center gap-1.5 text-xs text-slate-300 hover:text-white transition-all px-3 py-1.5 rounded-lg bg-[#2B3144]/80 hover:bg-[#39415A] border border-slate-700 cursor-pointer disabled:opacity-50 shadow-xs active:scale-95"
+              className="inline-flex items-center justify-center gap-1 sm:gap-1.5 text-xs text-slate-200 hover:text-white transition-all px-2 sm:px-3 py-1.5 rounded-lg bg-[#2B3144]/80 hover:bg-[#39415A] border border-slate-700 cursor-pointer disabled:opacity-50 shadow-xs active:scale-95 shrink-0 whitespace-nowrap"
             >
-              <RotateCcw className={`w-3.5 h-3.5 ${isResetting ? 'animate-spin text-[#F84464]' : 'text-slate-400'}`} />
-              <span className="text-xs font-medium">{isResetting ? 'Resetting...' : 'Reset Seats'}</span>
+              <RotateCcw className={`w-3.5 h-3.5 ${isResetting ? 'animate-spin text-[#F84464]' : 'text-slate-400'} shrink-0`} />
+              <span className="text-[11px] sm:text-xs font-medium">{isResetting ? 'Resetting...' : 'Reset Seats'}</span>
             </button>
           </div>
         </div>
 
         {/* Theatrical Subheader Strip */}
-        <div className="bg-[#121622] border-t border-slate-800/80 px-4 sm:px-6 py-2.5">
-          <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2 text-slate-300">
-              <span className="font-bold text-white text-sm tracking-wide">
+        <div className="bg-[#121622] border-t border-slate-800/80 px-3 sm:px-6 py-2">
+          <div className="max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 sm:gap-3 text-xs">
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-slate-300">
+              <span className="font-bold text-white text-xs sm:text-sm tracking-wide">
                 {EVENT_SPEC.name}
               </span>
               <span className="text-slate-600">•</span>
-              <span className="text-rose-400 font-semibold bg-rose-950/60 px-2 py-0.5 rounded border border-rose-800/40 text-[11px]">
+              <span className="text-rose-400 font-semibold bg-rose-950/60 px-2 py-0.5 rounded border border-rose-800/40 text-[10px] sm:text-[11px]">
                 IMAX 2D
               </span>
-              <span className="hidden sm:inline text-slate-600">•</span>
-              <span className="hidden sm:inline text-slate-400">PVR INOX: Grand Rex Audi 01</span>
+              <span className="text-slate-600">•</span>
+              <span className="text-slate-400 text-[11px] sm:text-xs">PVR INOX: Grand Rex Audi 01</span>
             </div>
 
-            <div className="flex items-center gap-3">
-              <span className="text-slate-400 flex items-center gap-1">
-                <Calendar className="w-3.5 h-3.5 text-[#F84464]" /> Today, 07:30 PM
+            <div className="flex items-center gap-2.5 sm:gap-3 text-slate-400 text-[11px] sm:text-xs">
+              <span className="flex items-center gap-1">
+                <Calendar className="w-3.5 h-3.5 text-[#F84464] shrink-0" /> Today, 07:30 PM
               </span>
               <span className="text-slate-600">•</span>
-              <span className="text-slate-400 flex items-center gap-1">
-                <Film className="w-3.5 h-3.5 text-blue-400" /> Dolby Atmos 7.1
+              <span className="flex items-center gap-1">
+                <Film className="w-3.5 h-3.5 text-blue-400 shrink-0" /> Dolby Atmos 7.1
               </span>
             </div>
           </div>
@@ -480,70 +480,70 @@ export default function App() {
         <div className="absolute inset-0 bg-gradient-to-r from-[#0E121D] via-transparent to-[#0E121D] z-0" />
 
         {/* Banner Content */}
-        <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8 flex flex-col md:flex-row items-center md:items-end justify-between gap-6">
+        <div className="relative z-10 max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-7 flex flex-col md:flex-row items-center md:items-end justify-between gap-4 sm:gap-6">
           {/* Poster & Movie Title Block */}
-          <div className="flex items-center gap-5 w-full md:w-auto">
-            <div className="relative shrink-0 w-24 sm:w-28 rounded-xl overflow-hidden shadow-2xl border-2 border-white/20 bg-slate-900 group">
+          <div className="flex items-center gap-3.5 sm:gap-5 w-full md:w-auto">
+            <div className="relative shrink-0 w-20 sm:w-28 rounded-xl overflow-hidden shadow-2xl border-2 border-white/20 bg-slate-900 group">
               <img
                 src={eventPosterImg}
                 alt="Event Poster"
                 referrerPolicy="no-referrer"
-                className="w-full h-34 sm:h-40 object-cover group-hover:scale-105 transition-transform duration-300"
+                className="w-full h-28 sm:h-40 object-cover group-hover:scale-105 transition-transform duration-300"
               />
-              <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-[#F84464] text-[9px] font-black tracking-wider uppercase shadow-xs">
+              <span className="absolute top-1 left-1 sm:top-1.5 sm:left-1.5 px-1.5 py-0.5 rounded bg-[#F84464] text-[8px] sm:text-[9px] font-black tracking-wider uppercase shadow-xs">
                 LIVE
               </span>
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="px-2 py-0.5 rounded bg-white/10 text-white font-bold text-[10px] border border-white/20">
+            <div className="flex flex-col gap-1 sm:gap-1.5 min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                <span className="px-1.5 sm:px-2 py-0.5 rounded bg-white/10 text-white font-bold text-[9px] sm:text-[10px] border border-white/20">
                   UA 16+
                 </span>
-                <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-semibold text-[10px] border border-rose-500/30">
+                <span className="px-1.5 sm:px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-semibold text-[9px] sm:text-[10px] border border-rose-500/30">
                   Sci-Fi Concert Premiere
                 </span>
-                <span className="text-slate-400 text-xs flex items-center gap-1">
+                <span className="text-slate-400 text-[11px] sm:text-xs flex items-center gap-1">
                   <Clock className="w-3 h-3 text-slate-400" /> 2h 45m
                 </span>
               </div>
 
-              <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight leading-tight">
+              <h2 className="text-xl sm:text-2xl md:text-3xl font-extrabold text-white tracking-tight leading-tight">
                 {EVENT_SPEC.name}
               </h2>
 
-              <p className="text-xs text-slate-300 flex items-center gap-2 mt-0.5">
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                <span>Auditorium Seating: 10 Rows × 12 Columns • 120 Maximum Capacity</span>
+              <p className="text-[11px] sm:text-xs text-slate-300 flex items-center gap-1.5 mt-0.5">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span className="truncate">Auditorium Seating: 10 Rows × 12 Columns • 120 Seats</span>
               </p>
             </div>
           </div>
 
           {/* Real-time Inventory Pills */}
-          <div className="flex items-center gap-3 shrink-0 bg-black/40 backdrop-blur-md p-3 rounded-xl border border-white/10">
-            <div className="text-center px-2">
-              <span className="block text-lg font-black text-emerald-400 leading-tight">
+          <div className="flex items-center justify-around sm:justify-center gap-2 sm:gap-3 w-full md:w-auto shrink-0 bg-black/40 backdrop-blur-md p-2.5 sm:p-3 rounded-xl border border-white/10">
+            <div className="text-center px-2 sm:px-3">
+              <span className="block text-base sm:text-lg font-black text-emerald-400 leading-tight">
                 {availableCount}
               </span>
-              <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-400">
+              <span className="text-[9px] sm:text-[10px] uppercase tracking-wider font-semibold text-slate-400">
                 Available
               </span>
             </div>
-            <div className="w-px h-8 bg-white/10" />
-            <div className="text-center px-2">
-              <span className="block text-lg font-black text-amber-400 leading-tight">
+            <div className="w-px h-7 sm:h-8 bg-white/10" />
+            <div className="text-center px-2 sm:px-3">
+              <span className="block text-base sm:text-lg font-black text-amber-400 leading-tight">
                 {heldCount}
               </span>
-              <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-400">
+              <span className="text-[9px] sm:text-[10px] uppercase tracking-wider font-semibold text-slate-400">
                 Held
               </span>
             </div>
-            <div className="w-px h-8 bg-white/10" />
-            <div className="text-center px-2">
-              <span className="block text-lg font-black text-slate-400 leading-tight">
+            <div className="w-px h-7 sm:h-8 bg-white/10" />
+            <div className="text-center px-2 sm:px-3">
+              <span className="block text-base sm:text-lg font-black text-slate-400 leading-tight">
                 {bookedCount}
               </span>
-              <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-400">
+              <span className="text-[9px] sm:text-[10px] uppercase tracking-wider font-semibold text-slate-400">
                 Booked
               </span>
             </div>
@@ -689,9 +689,9 @@ export default function App() {
         {activeHold && (
           <div
             id="active-hold-panel"
-            className="p-5 bg-gradient-to-r from-amber-50 via-white to-amber-50 border-2 border-amber-400 rounded-2xl shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
+            className="p-4 sm:p-5 bg-gradient-to-r from-amber-50 via-white to-amber-50 border-2 border-amber-400 rounded-2xl shadow-sm flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4"
           >
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-1 min-w-0">
               <div className="flex items-center gap-2">
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-black bg-amber-400 text-amber-950 uppercase tracking-wider shadow-2xs">
                   <Lock className="w-3 h-3" /> Locked & Held
@@ -705,7 +705,7 @@ export default function App() {
                 <span id="active-hold-seats-list" className="text-emerald-700 font-extrabold text-base">
                   {activeHold.seats.join(', ')}
                 </span>
-                <span className="text-slate-500 font-normal ml-2">
+                <span className="text-slate-500 font-normal ml-2 text-xs sm:text-sm">
                   ({activeHold.seats.length} seat{activeHold.seats.length > 1 ? 's' : ''} reserved)
                 </span>
               </p>
@@ -719,20 +719,22 @@ export default function App() {
             </div>
 
             {/* Countdown and Action Buttons */}
-            <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-              <HoldCountdown
-                expiresAt={activeHold.expiresAt}
-                onExpired={handleHoldExpired}
-              />
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 sm:gap-3 w-full lg:w-auto">
+              <div className="self-center sm:self-auto">
+                <HoldCountdown
+                  expiresAt={activeHold.expiresAt}
+                  onExpired={handleHoldExpired}
+                />
+              </div>
 
               <button
                 id="release-hold-btn"
                 type="button"
                 onClick={handleReleaseHold}
                 disabled={releaseSubmitting || confirmSubmitting}
-                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors disabled:opacity-50 cursor-pointer shadow-2xs"
+                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors disabled:opacity-50 cursor-pointer shadow-2xs min-h-[40px]"
               >
-                <Unlock className="w-3.5 h-3.5 text-slate-500" />
+                <Unlock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                 <span>{releaseSubmitting ? 'Releasing...' : 'Release Hold'}</span>
               </button>
 
@@ -741,9 +743,9 @@ export default function App() {
                 type="button"
                 onClick={handleConfirmBooking}
                 disabled={confirmSubmitting || releaseSubmitting}
-                className="inline-flex items-center justify-center gap-1.5 px-5 py-2.5 text-xs font-extrabold text-white bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 rounded-lg shadow-md shadow-emerald-600/30 transition-all disabled:opacity-50 cursor-pointer uppercase tracking-wider"
+                className="inline-flex items-center justify-center gap-1.5 px-5 py-2.5 text-xs font-extrabold text-white bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 rounded-lg shadow-md shadow-emerald-600/30 transition-all disabled:opacity-50 cursor-pointer uppercase tracking-wider min-h-[40px]"
               >
-                <CheckCircle2 className="w-4 h-4" />
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
                 <span>{confirmSubmitting ? 'Confirming Ticket...' : 'Confirm & Book Ticket'}</span>
               </button>
             </div>
@@ -754,26 +756,26 @@ export default function App() {
         {!activeHold && (
           <div
             id="selection-bar"
-            className="p-4 sm:p-5 bg-white border border-slate-200/80 rounded-2xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
+            className="p-4 sm:p-5 bg-white border border-slate-200/80 rounded-2xl shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4"
           >
-            <div>
-              <p className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                Selected Seats:
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-slate-900 flex flex-wrap items-center gap-1.5 sm:gap-2">
+                <span>Selected Seats:</span>
                 {selectedSeatIds.length > 0 ? (
-                  <span id="selected-seats-display" className="text-emerald-700 font-extrabold text-base">
+                  <span id="selected-seats-display" className="text-emerald-700 font-extrabold text-sm sm:text-base">
                     {selectedSeatIds.join(', ')} ({selectedSeatIds.length}/{EVENT_SPEC.maxSelectableSeats})
                   </span>
                 ) : (
-                  <span id="no-seats-selected" className="text-slate-400 font-normal">
+                  <span id="no-seats-selected" className="text-slate-400 font-normal text-xs sm:text-sm">
                     None (Tap on up to 4 available seats in the map)
                   </span>
                 )}
               </p>
-              <p className="text-xs text-slate-500 mt-1 flex items-center gap-2">
+              <p className="text-xs text-slate-500 mt-1 flex flex-wrap items-center gap-2">
                 <span>Hold Duration: <strong>5 minutes</strong></span>
                 {selectedSeatIds.length > 0 && (
                   <>
-                    <span>•</span>
+                    <span className="hidden xs:inline">•</span>
                     <span className="text-[#F84464] font-bold">
                       Estimated Total: ₹{calculateTotalEstimate()}
                     </span>
@@ -782,13 +784,13 @@ export default function App() {
               </p>
             </div>
 
-            <div className="flex items-center gap-2.5 w-full sm:w-auto">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0">
               {selectedSeatIds.length > 0 && (
                 <button
                   id="clear-selection-btn"
                   type="button"
                   onClick={() => setSelectedSeatIds([])}
-                  className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 transition-colors cursor-pointer"
+                  className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 transition-colors cursor-pointer text-center"
                 >
                   Clear Selection
                 </button>
@@ -799,9 +801,9 @@ export default function App() {
                 type="button"
                 disabled={selectedSeatIds.length === 0 || holdSubmitting || loading}
                 onClick={handleCreateHold}
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl text-xs font-black text-white bg-gradient-to-r from-[#F84464] to-[#E03A58] hover:from-[#E03A58] hover:to-[#D02846] disabled:from-slate-200 disabled:to-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed shadow-md shadow-rose-600/20 transition-all uppercase tracking-wider cursor-pointer"
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 sm:px-6 py-2.5 rounded-xl text-xs font-black text-white bg-gradient-to-r from-[#F84464] to-[#E03A58] hover:from-[#E03A58] hover:to-[#D02846] disabled:from-slate-200 disabled:to-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed shadow-md shadow-rose-600/20 transition-all uppercase tracking-wider cursor-pointer whitespace-nowrap min-h-[42px]"
               >
-                <Lock className="w-3.5 h-3.5" />
+                <Lock className="w-3.5 h-3.5 shrink-0" />
                 <span>
                   {holdSubmitting
                     ? 'Locking Seats...'
