@@ -54,6 +54,17 @@ async function startServer() {
   const apiProxy = createProxyMiddleware({
     target: 'http://127.0.0.1:8001',
     changeOrigin: true,
+    on: {
+      error: (err, req, res) => {
+        console.error('[API Proxy Error]', req.method, req.url, err.message);
+        const resObj = res as express.Response;
+        if (resObj && !resObj.headersSent && typeof resObj.status === 'function') {
+          resObj.status(502).json({
+            detail: 'Seat booking service is warming up or temporarily busy. Please retry.',
+          });
+        }
+      },
+    },
   });
 
   app.use((req, res, next) => {

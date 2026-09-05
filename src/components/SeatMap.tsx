@@ -68,20 +68,28 @@ export const SeatMap: React.FC<SeatMapProps> = ({
         </div>
       </div>
 
-      {/* Mobile Swipe Hint */}
-      <div className="md:hidden flex items-center justify-center gap-1.5 mb-2 text-[11px] text-slate-400 font-medium select-none">
-        <span>↔ Swipe horizontally to view all 12 columns</span>
+      {/* Mobile Swipe Guidance Banner */}
+      <div className="sm:hidden flex items-center justify-between px-3 py-1.5 mb-2.5 bg-slate-100/90 border border-slate-200 text-slate-600 rounded-lg text-xs font-medium w-full max-w-3xl select-none">
+        <span className="flex items-center gap-1 text-[11px] font-semibold text-slate-700">
+          <span>Row & Seats 1–6</span>
+        </span>
+        <span className="text-[10px] text-rose-600 font-bold uppercase tracking-wider">
+          ↔ Swipe for Seats 7–12
+        </span>
+        <span className="flex items-center gap-1 text-[11px] font-semibold text-slate-700">
+          <span>Seats 7–12</span>
+        </span>
       </div>
 
       {/* Grid: 10 Rows (A-J) x 12 Seats (1-12) */}
       <div
         id="seats-grid"
-        className="flex flex-col gap-2.5 sm:gap-3 p-3 sm:p-6 bg-white border border-slate-200/90 rounded-2xl shadow-xs overflow-x-auto w-full max-w-3xl touch-pan-x"
+        className="w-full max-w-3xl overflow-x-auto p-3 sm:p-6 bg-white border border-slate-200/90 rounded-2xl shadow-xs touch-pan-x"
       >
-        <div className="min-w-[490px] sm:min-w-0 flex flex-col gap-2.5 sm:gap-3 mx-auto">
+        <div className="w-max min-w-full flex flex-col gap-2.5 sm:gap-3 items-start sm:items-center">
           {/* Column Number Headers */}
-          <div className="flex items-center justify-center gap-2 mb-1 text-[11px] font-semibold text-slate-400">
-            <span className="w-7 text-center" />
+          <div className="flex items-center justify-start sm:justify-center gap-2 mb-1 text-[11px] font-semibold text-slate-400 w-full">
+            <span className="w-7 text-center font-bold text-slate-400 text-[10px] uppercase">Row</span>
             <div className="flex items-center gap-1.5 sm:gap-2">
               {Array.from({ length: 6 }, (_, i) => i + 1).map((col) => (
                 <span key={col} className="w-8 sm:w-9 text-center">
@@ -98,11 +106,11 @@ export const SeatMap: React.FC<SeatMapProps> = ({
                 </span>
               ))}
             </div>
-            <span className="w-7 text-center" />
+            <span className="w-7 text-center font-bold text-slate-400 text-[10px] uppercase">Row</span>
           </div>
 
           {/* 10 Rows with Tier Category Header Indicators */}
-          {EVENT_SPEC.rows.map((rowLabel, index) => {
+          {EVENT_SPEC.rows.map((rowLabel) => {
             let categoryHeader = null;
             if (rowLabel === 'A') {
               categoryHeader = (
@@ -136,9 +144,9 @@ export const SeatMap: React.FC<SeatMapProps> = ({
             return (
               <React.Fragment key={rowLabel}>
                 {categoryHeader}
-                <div className="flex items-center justify-center gap-2">
+                <div className="flex items-center justify-start sm:justify-center gap-2 w-full">
                   {/* Left Row Indicator */}
-                  <span className="w-7 text-center font-bold text-slate-600 text-xs sm:text-sm">
+                  <span className="w-7 text-center font-bold text-slate-700 text-xs sm:text-sm bg-slate-100/90 py-1 rounded">
                     {rowLabel}
                   </span>
 
@@ -164,7 +172,7 @@ export const SeatMap: React.FC<SeatMapProps> = ({
                   </div>
 
                   {/* Right Row Indicator */}
-                  <span className="w-7 text-center font-bold text-slate-600 text-xs sm:text-sm">
+                  <span className="w-7 text-center font-bold text-slate-700 text-xs sm:text-sm bg-slate-100/90 py-1 rounded">
                     {rowLabel}
                   </span>
                 </div>

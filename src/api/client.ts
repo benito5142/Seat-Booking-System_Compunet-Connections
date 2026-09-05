@@ -26,7 +26,25 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     this.statusCode = statusCode;
     this.unavailableSeats = unavailableSeats;
+    Object.setPrototypeOf(this, ApiError.prototype);
   }
+}
+
+/**
+ * Safe type-guard for ApiError that works across bundle boundaries and transpilation.
+ */
+export function isApiError(err: unknown): err is ApiError {
+  if (err instanceof ApiError) return true;
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    'name' in err &&
+    (err as { name: string }).name === 'ApiError' &&
+    'statusCode' in err
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -105,8 +123,9 @@ export async function getSeats(): Promise<Seat[]> {
     }
     return data;
   } catch (err) {
-    if (err instanceof ApiError) throw err;
-    throw new ApiError('Network error while loading seat map', 0);
+    if (isApiError(err)) throw err;
+    const msg = err instanceof Error ? err.message : 'Network error while loading seat map';
+    throw new ApiError(msg, 0);
   }
 }
 
@@ -131,10 +150,11 @@ export async function createHold(seats: string[], userId: string = 'user_1'): Pr
       throw await parseErrorResponse(response, 'Failed to place hold on seats');
     }
 
-    return response.json();
+    return await response.json();
   } catch (err) {
-    if (err instanceof ApiError) throw err;
-    throw new ApiError('Network error while placing hold', 0);
+    if (isApiError(err)) throw err;
+    const msg = err instanceof Error ? err.message : 'Network error while placing hold';
+    throw new ApiError(msg, 0);
   }
 }
 
@@ -155,10 +175,11 @@ export async function releaseHold(holdIdentifier: string | number): Promise<{ st
       throw await parseErrorResponse(response, 'Failed to release hold');
     }
 
-    return response.json();
+    return await response.json();
   } catch (err) {
-    if (err instanceof ApiError) throw err;
-    throw new ApiError('Network error while releasing hold', 0);
+    if (isApiError(err)) throw err;
+    const msg = err instanceof Error ? err.message : 'Network error while releasing hold';
+    throw new ApiError(msg, 0);
   }
 }
 
@@ -184,10 +205,11 @@ export async function confirmBooking(holdId: string | number, userId: string = '
       throw await parseErrorResponse(response, 'Failed to confirm booking');
     }
 
-    return response.json();
+    return await response.json();
   } catch (err) {
-    if (err instanceof ApiError) throw err;
-    throw new ApiError('Network error while confirming booking', 0);
+    if (isApiError(err)) throw err;
+    const msg = err instanceof Error ? err.message : 'Network error while confirming booking';
+    throw new ApiError(msg, 0);
   }
 }
 
@@ -208,9 +230,10 @@ export async function resetAllSeats(): Promise<{ success: boolean; message: stri
       throw await parseErrorResponse(response, 'Failed to reset seats');
     }
 
-    return response.json();
+    return await response.json();
   } catch (err) {
-    if (err instanceof ApiError) throw err;
-    throw new ApiError('Network error while resetting seats', 0);
+    if (isApiError(err)) throw err;
+    const msg = err instanceof Error ? err.message : 'Network error while resetting seats';
+    throw new ApiError(msg, 0);
   }
 }

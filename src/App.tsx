@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Seat, ActiveHold, BookingResponse } from './types';
 import { EVENT_SPEC } from './config';
-import { getSeats, createHold, releaseHold, confirmBooking, resetAllSeats, ApiError } from './api/client';
+import { getSeats, createHold, releaseHold, confirmBooking, resetAllSeats, ApiError, isApiError } from './api/client';
 import { SeatMap } from './components/SeatMap';
 import { HoldCountdown } from './components/HoldCountdown';
 import movieBannerImg from './assets/images/movie_event_banner_1788586861818.jpg';
@@ -199,7 +199,7 @@ export default function App() {
       // Refresh seat map immediately to reflect HELD status from backend
       await loadSeats(false);
     } catch (err) {
-      if (err instanceof ApiError) {
+      if (isApiError(err)) {
         // Concurrency conflict / stale seat scenario
         if (err.statusCode === 409) {
           const conflictSeats = err.unavailableSeats?.join(', ') || 'one or more selected seats';
@@ -213,8 +213,10 @@ export default function App() {
         } else {
           setErrorMessage(err.message);
         }
+      } else if (err instanceof Error) {
+        setErrorMessage(err.message);
       } else {
-        setErrorMessage('An unexpected error occurred while placing hold');
+        setErrorMessage('Failed to place hold on seats. Please retry.');
       }
 
       // Authoritative backend refresh
@@ -241,7 +243,7 @@ export default function App() {
       setInfoMessage('Hold released successfully. The seats are now available for selection.');
       await loadSeats(false);
     } catch (err) {
-      if (err instanceof ApiError) {
+      if (isApiError(err)) {
         // If already expired or released, clear hold locally
         if (err.statusCode === 404 || err.statusCode === 400) {
           setActiveHold(null);
@@ -250,6 +252,8 @@ export default function App() {
           await loadSeats(false);
           return;
         }
+        setErrorMessage(err.message);
+      } else if (err instanceof Error) {
         setErrorMessage(err.message);
       } else {
         setErrorMessage('Failed to release hold');
@@ -279,7 +283,7 @@ export default function App() {
       );
       await loadSeats(false);
     } catch (err) {
-      if (err instanceof ApiError) {
+      if (isApiError(err)) {
         if (err.statusCode === 400 || err.statusCode === 409 || err.statusCode === 410) {
           setErrorMessage(
             `Unable to confirm booking: ${err.message}. If your hold has expired, please select seats again.`
@@ -289,8 +293,10 @@ export default function App() {
           return;
         }
         setErrorMessage(err.message);
+      } else if (err instanceof Error) {
+        setErrorMessage(err.message);
       } else {
-        setErrorMessage('An unexpected network error occurred while confirming booking');
+        setErrorMessage('Failed to confirm booking');
       }
     } finally {
       setConfirmSubmitting(false);
@@ -315,7 +321,9 @@ export default function App() {
       setInfoMessage(result.message || 'All seats have been reset to Available.');
       await loadSeats(false);
     } catch (err) {
-      if (err instanceof ApiError) {
+      if (isApiError(err)) {
+        setErrorMessage(err.message);
+      } else if (err instanceof Error) {
         setErrorMessage(err.message);
       } else {
         setErrorMessage('Failed to reset seats');
