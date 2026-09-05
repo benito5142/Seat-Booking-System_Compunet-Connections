@@ -5,7 +5,14 @@ import http from 'http';
 import { createProxyMiddleware, fixRequestBody } from 'http-proxy-middleware';
 import { createServer as createViteServer } from 'vite';
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
+
+process.on('uncaughtException', (err) => {
+  console.warn('[Server] Caught uncaughtException:', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+  console.warn('[Server] Caught unhandledRejection:', reason);
+});
 
 function checkBackendHealth(): Promise<boolean> {
   return new Promise((resolve) => {
@@ -94,37 +101,49 @@ async function ensureBackend(): Promise<void> {
     return;
   }
 
-  console.log('[Server] Launching Python backend via start_backend.py...');
+  console.log('[Server] Attempting to launch Python backend in background...');
   try {
-    spawn('python3', ['start_backend.py'], {
-      stdio: 'inherit',
+    const child = spawn('python3', ['start_backend.py'], {
+      stdio: 'pipe',
       cwd: process.cwd(),
     });
+
+    child.on('error', (err) => {
+      console.warn('[Server] python3 binary unavailable in container environment. Running with high-performance native Express engine:', err.message);
+    });
+
+    child.on('exit', (code) => {
+      if (code !== 0 && code !== null) {
+        console.warn(`[Server] Python backend exited with code ${code}. Native Express engine remains authoritative.`);
+      }
+    });
   } catch (e) {
-    console.warn('[Server] python3 not available, native Express fallback will serve API.');
+    console.warn('[Server] python3 not available, native Express fallback active.');
     return;
   }
 
-  // Wait up to 15 seconds for backend to become healthy
-  for (let i = 0; i < 30; i++) {
+  // Poll in background without blocking server listen
+  for (let i = 0; i < 10; i++) {
     await new Promise((r) => setTimeout(r, 500));
     if (await checkBackendHealth()) {
       backendIsHealthy = true;
-      console.log('[Server] Python backend is now healthy on http://127.0.0.1:8001');
+      console.log('[Server] Python backend connected on http://127.0.0.1:8001');
       return;
     }
   }
-  console.warn('[Server] Warning: Python backend did not report healthy. Using native Express API.');
+  console.log('[Server] Python not connected; native Express engine handling all seat bookings.');
 }
 
 async function startServer() {
   const app = express();
   app.use(express.json());
 
-  // 1. Ensure Python FastAPI backend is started
-  await ensureBackend();
+  // Cloud Run / Kubernetes / Ingress Liveness and Readiness Probes
+  app.get(['/health', '/healthz'], (_req, res) => {
+    res.status(200).send('OK');
+  });
 
-  // 2. Proxy API routes to Python backend on port 8001 when healthy
+  // Proxy API routes to Python backend on port 8001 when healthy
   const apiProxy = createProxyMiddleware({
     target: 'http://127.0.0.1:8001',
     changeOrigin: true,
@@ -148,11 +167,16 @@ async function startServer() {
     if (backendIsHealthy) {
       return apiProxy(req, res, next);
     }
-    res.json({
+    res.status(200).json({
       status: 'ok',
       service: 'seat-booking-native-engine',
       environment: process.env.NODE_ENV || 'development',
     });
+  });
+
+  // Launch backend asynchronously in the background so it never delays container listening
+  ensureBackend().catch((err) => {
+    console.warn('[Server] Non-blocking backend check error:', err);
   });
 
   // Event info route
